@@ -13,6 +13,13 @@ class KnowledgeGraph:
             **attributes
         )
 
+    def add_node_object(self, node):
+        self.graph.add_node(
+            node.node_id,
+            type=node.node_type,
+            **node.attributes
+        )
+
     def add_relationship(self, source, relation, target):
         self.graph.add_edge(
             source,
@@ -24,10 +31,12 @@ class KnowledgeGraph:
         return self.graph.nodes[node_id]
 
     def get_relationships(self, node_id):
-        return list(self.graph.edges(
-            node_id,
-            data=True
-        ))
+        return list(
+            self.graph.edges(
+                node_id,
+                data=True
+            )
+        )
 
     def get_graph(self):
         return self.graph
