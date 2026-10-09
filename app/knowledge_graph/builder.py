@@ -1,4 +1,5 @@
 from app.knowledge_graph.graph import KnowledgeGraph
+from app.schemas import AgentResult
 
 
 class KnowledgeGraphBuilder:
@@ -6,105 +7,118 @@ class KnowledgeGraphBuilder:
     def __init__(self, knowledge_graph):
         self.kg = knowledge_graph
 
-    def add_agent_result(self, result):
+    def add_agent_result(self, result: AgentResult):
 
-        dataset_id = result["dataset_id"]
-        dataset_name = result["dataset"]
+        # ---------------------------------------------------------
+        # Create a unique result prefix
+        # ---------------------------------------------------------
 
-        feature_id = result["feature_id"]
-        feature_name = result["feature"]
+        result_id = len(
+            [
+                node_id
+                for node_id, data in self.kg.graph.nodes(data=True)
+                if data.get("type") == "finding"
+            ]
+        ) + 1
 
-        finding_id = result["finding_id"]
-        finding_description = result["finding"]
+        # ---------------------------------------------------------
+        # Dataset
+        # ---------------------------------------------------------
 
-        confidence = result.get("confidence", 0.0)
-
-        evidence_id = result["evidence_id"]
-        evidence_description = result["evidence"]
-
-        # -------------------------
-        # Add Dataset
-        # -------------------------
+        dataset_id = f"dataset_{result.dataset}"
 
         self.kg.add_node(
             dataset_id,
             "dataset",
-            name=dataset_name
+            name=result.dataset
         )
 
-        # -------------------------
-        # Add Feature
-        # -------------------------
+        # ---------------------------------------------------------
+        # Findings
+        # ---------------------------------------------------------
 
-        self.kg.add_node(
-            feature_id,
-            "feature",
-            name=feature_name
-        )
+        for finding_index, finding_description in enumerate(
+            result.findings,
+            start=1
+        ):
 
-        # -------------------------
-        # Add Finding
-        # -------------------------
-
-        self.kg.add_node(
-            finding_id,
-            "finding",
-            description=finding_description,
-            confidence=confidence
-        )
-
-        # -------------------------
-        # Add Evidence
-        # -------------------------
-
-        self.kg.add_node(
-            evidence_id,
-            "evidence",
-            evidence=evidence_description
-        )
-
-        # -------------------------
-        # Add Relationships
-        # -------------------------
-
-        self.kg.add_relationship(
-            dataset_id,
-            "contains",
-            feature_id
-        )
-
-        self.kg.add_relationship(
-            feature_id,
-            "supports",
-            finding_id
-        )
-
-        self.kg.add_relationship(
-            finding_id,
-            "supported_by",
-            evidence_id
-        )
-
-        # -------------------------
-        # Optional ML Model
-        # -------------------------
-
-        if "model_id" in result:
-
-            model_id = result["model_id"]
-            model_name = result["model"]
-
-            accuracy = result.get("accuracy")
+            finding_id = (
+                f"finding_{result_id}_{finding_index}"
+            )
 
             self.kg.add_node(
-                model_id,
-                "model",
-                model_name=model_name,
-                accuracy=accuracy
+                finding_id,
+                "finding",
+                description=finding_description,
+                confidence=result.confidence,
+                task=result.task,
+                agent=result.agent
             )
 
             self.kg.add_relationship(
-                finding_id,
-                "generated_by",
-                model_id
+                dataset_id,
+                "contains_finding",
+                finding_id
             )
+
+            # -----------------------------------------------------
+            # Evidence
+            # -----------------------------------------------------
+
+            for evidence_index, evidence in enumerate(
+                result.evidence,
+                start=1
+            ):
+
+                evidence_id = (
+                    f"evidence_"
+                    f"{result_id}_"
+                    f"{finding_index}_"
+                    f"{evidence_index}"
+                )
+
+                self.kg.add_node(
+                    evidence_id,
+                    "evidence",
+                    description=evidence.description,
+                    method=evidence.method,
+                    value=evidence.value
+                )
+
+                self.kg.add_relationship(
+                    finding_id,
+                    "supported_by",
+                    evidence_id
+                )
+
+            # -----------------------------------------------------
+            # Model
+            # -----------------------------------------------------
+
+            if result.model is not None:
+
+                model_id = (
+                    f"model_"
+                    f"{result_id}_"
+                    f"{finding_index}"
+                )
+
+                accuracy = result.model.metrics.get(
+                    "accuracy"
+                )
+
+                self.kg.add_node(
+                    model_id,
+                    "model",
+                    model_name=result.model.name,
+                    accuracy=accuracy,
+                    metrics=result.model.metrics
+                )
+
+                self.kg.add_relationship(
+                    finding_id,
+                    "generated_by",
+                    model_id
+                )
+
+        return self.kg

@@ -49,12 +49,18 @@ class SelfEvolutionEngine:
     # 2. STORE EXECUTION HISTORY
     # ---------------------------------------------------------
 
+
     def update_knowledge(self, result, evaluation):
 
-        execution_id = (
-            f"execution_{len(self.kg.graph.nodes) + 1}"
-        )
+        # Generate a unique execution ID
+        execution_number = 1
 
+        while f"execution_{execution_number}" in self.kg.graph.nodes:
+            execution_number += 1
+
+        execution_id = f"execution_{execution_number}"
+
+        # Store execution history
         self.kg.add_node(
             execution_id,
             "execution",
@@ -66,6 +72,47 @@ class SelfEvolutionEngine:
             model_performance=evaluation["model_performance"],
             verification_passed=evaluation["verification_passed"]
         )
+
+        # Connect the execution to findings from this agent and task.
+        # Match the dataset too, so unrelated results are not linked.
+        for node_id, data in list(self.kg.graph.nodes(data=True)):
+
+            if data.get("type") != "finding":
+                continue
+
+            if data.get("agent") != result.agent:
+                continue
+
+            if data.get("task") != result.task:
+                continue
+
+            if not any(
+                node_data.get("type") == "dataset"
+                and node_data.get("name") == result.dataset
+                and self.kg.graph.has_edge(node_id, dataset_id)
+                and self.kg.graph.edges[node_id, dataset_id].get("relation")
+                    == "belongs_to"
+                for dataset_id, node_data in self.kg.graph.nodes(data=True)
+            ):
+                # Check the dataset through the existing
+                # dataset -> finding relationship instead.
+                matching_dataset = any(
+                    node_data.get("type") == "dataset"
+                    and node_data.get("name") == result.dataset
+                    and self.kg.graph.has_edge(dataset_id, node_id)
+                    and self.kg.graph.edges[dataset_id, node_id].get("relation")
+                        == "contains_finding"
+                    for dataset_id, node_data in self.kg.graph.nodes(data=True)
+                )
+
+                if not matching_dataset:
+                    continue
+
+            self.kg.add_relationship(
+                execution_id,
+                "produced",
+                node_id
+            )
 
         return execution_id
 
