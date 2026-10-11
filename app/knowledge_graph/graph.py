@@ -1,10 +1,13 @@
+
 import networkx as nx
 
 
 class KnowledgeGraph:
 
     def __init__(self):
-        self.graph = nx.DiGraph()
+        # MultiDiGraph allows multiple relationship types
+        # between the same pair of nodes.
+        self.graph = nx.MultiDiGraph()
 
     def add_node(self, node_id, node_type, **attributes):
         self.graph.add_node(
@@ -24,6 +27,7 @@ class KnowledgeGraph:
         self.graph.add_edge(
             source,
             target,
+            key=relation,
             relation=relation
         )
 
@@ -32,8 +36,9 @@ class KnowledgeGraph:
 
     def get_relationships(self, node_id):
         return list(
-            self.graph.edges(
+            self.graph.out_edges(
                 node_id,
+                keys=True,
                 data=True
             )
         )
