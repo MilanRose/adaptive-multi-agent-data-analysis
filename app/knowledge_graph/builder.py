@@ -1,4 +1,3 @@
-from app.knowledge_graph.graph import KnowledgeGraph
 from app.schemas import AgentResult
 
 
@@ -8,23 +7,18 @@ class KnowledgeGraphBuilder:
         self.kg = knowledge_graph
 
     def add_agent_result(self, result: AgentResult):
+        # Generate a unique result number
+        result_number = 1
 
-        # ---------------------------------------------------------
-        # Create a unique result prefix
-        # ---------------------------------------------------------
+        while any(
+            node_id.startswith(f"finding_{result_number}_")
+            for node_id in self.kg.graph.nodes
+        ):
+            result_number += 1
 
-        result_id = len(
-            [
-                node_id
-                for node_id, data in self.kg.graph.nodes(data=True)
-                if data.get("type") == "finding"
-            ]
-        ) + 1
+        created_finding_ids = []
 
-        # ---------------------------------------------------------
-        # Dataset
-        # ---------------------------------------------------------
-
+        # Create or reuse the dataset node
         dataset_id = f"dataset_{result.dataset}"
 
         self.kg.add_node(
@@ -33,18 +27,11 @@ class KnowledgeGraphBuilder:
             name=result.dataset
         )
 
-        # ---------------------------------------------------------
-        # Findings
-        # ---------------------------------------------------------
-
+        # Create finding nodes
         for finding_index, finding_description in enumerate(
-            result.findings,
-            start=1
+            result.findings, start=1
         ):
-
-            finding_id = (
-                f"finding_{result_id}_{finding_index}"
-            )
+            finding_id = f"finding_{result_number}_{finding_index}"
 
             self.kg.add_node(
                 finding_id,
@@ -55,34 +42,55 @@ class KnowledgeGraphBuilder:
                 agent=result.agent
             )
 
+            created_finding_ids.append(finding_id)
+
+            # Connect dataset to finding
             self.kg.add_relationship(
                 dataset_id,
                 "contains_finding",
                 finding_id
             )
 
-            # -----------------------------------------------------
-            # Evidence
-            # -----------------------------------------------------
+            # Connect explicitly supplied features to matching findings
+            for feature_name in result.features:
+                if feature_name in finding_description:
+                    feature_id = (
+                        f"feature_{result.dataset}_{feature_name}"
+                    )
 
-            for evidence_index, evidence in enumerate(
-                result.evidence,
-                start=1
+                    self.kg.add_node(
+                        feature_id,
+                        "feature",
+                        name=feature_name
+                    )
+
+                    self.kg.add_relationship(
+                        dataset_id,
+                        "contains",
+                        feature_id
+                    )
+
+                    self.kg.add_relationship(
+                        feature_id,
+                        "supports",
+                        finding_id
+                    )
+
+            # Create evidence nodes
+            for evidence_index, evidence_item in enumerate(
+                result.evidence, start=1
             ):
-
                 evidence_id = (
-                    f"evidence_"
-                    f"{result_id}_"
-                    f"{finding_index}_"
-                    f"{evidence_index}"
+                    f"evidence_{result_number}_"
+                    f"{finding_index}_{evidence_index}"
                 )
 
                 self.kg.add_node(
                     evidence_id,
                     "evidence",
-                    description=evidence.description,
-                    method=evidence.method,
-                    value=evidence.value
+                    description=evidence_item.description,
+                    method=evidence_item.method,
+                    value=evidence_item.value
                 )
 
                 self.kg.add_relationship(
@@ -91,27 +99,17 @@ class KnowledgeGraphBuilder:
                     evidence_id
                 )
 
-            # -----------------------------------------------------
-            # Model
-            # -----------------------------------------------------
-
+            # Create a model node when a model is available
             if result.model is not None:
-
                 model_id = (
-                    f"model_"
-                    f"{result_id}_"
-                    f"{finding_index}"
-                )
-
-                accuracy = result.model.metrics.get(
-                    "accuracy"
+                    f"model_{result_number}_{finding_index}"
                 )
 
                 self.kg.add_node(
                     model_id,
                     "model",
                     model_name=result.model.name,
-                    accuracy=accuracy,
+                    accuracy=result.model.metrics.get("accuracy"),
                     metrics=result.model.metrics
                 )
 
@@ -121,4 +119,4 @@ class KnowledgeGraphBuilder:
                     model_id
                 )
 
-        return self.kg
+        return created_finding_ids

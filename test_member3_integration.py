@@ -55,7 +55,7 @@ result = AgentResult(
 # 3. BUILD KNOWLEDGE GRAPH
 # =========================================================
 
-builder.add_agent_result(result)
+finding_ids = builder.add_agent_result(result)
 
 
 print("\n========================================")
@@ -120,7 +120,8 @@ print(evaluation)
 
 execution_id = evolution.update_knowledge(
     result,
-    evaluation
+    evaluation,
+    finding_ids
 )
 
 

@@ -1,3 +1,4 @@
+
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
@@ -19,6 +20,9 @@ class AgentResult(BaseModel):
     task: str
 
     findings: List[str] = Field(default_factory=list)
+
+    # Feature names associated with this agent result
+    features: List[str] = Field(default_factory=list)
 
     evidence: List[Evidence] = Field(default_factory=list)
 
