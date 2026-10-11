@@ -67,7 +67,14 @@ def main():
     print("EXECUTION NODE:", kg.get_node(execution_id))
 
     assert kg.graph.has_edge(execution_id, finding_ids[0])
-    assert kg.graph.edges[execution_id, finding_ids[0]]["relation"] == "produced"
+    assert any(
+        data.get("relation") == "produced"
+        for _, _, data in kg.graph.edges(
+            execution_id,
+            data=True
+        )
+        if _ == finding_ids[0]
+    )
 
     # --------------------------------------------------
     # 2. Failed ML execution
@@ -107,7 +114,14 @@ def main():
     print("FINDINGS:", failed_finding_ids)
 
     assert kg.graph.has_edge(failed_execution_id, failed_finding_ids[0])
-    assert kg.graph.edges[failed_execution_id, failed_finding_ids[0]]["relation"] == "produced"
+    assert any(
+        data.get("relation") == "produced"
+        for source, target, data in kg.graph.edges(
+            failed_execution_id,
+            data=True
+        )
+        if target == failed_finding_ids[0]
+    )
 
     # --------------------------------------------------
     # 3. Verify exact provenance
