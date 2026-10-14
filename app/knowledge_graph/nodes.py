@@ -46,15 +46,38 @@ class FindingNode(Node):
         )
 
 
+
 class EvidenceNode(Node):
 
-    def __init__(self, node_id, evidence, **attributes):
+    def __init__(
+        self,
+        node_id,
+        evidence=None,
+        method=None,
+        value=None,
+        finding_indices=None,
+        description=None,
+        **attributes
+    ):
+        # Preserve the existing "evidence" attribute while also
+        # supporting the shared Evidence schema's "description" field.
+        evidence_text = (
+            description if description is not None else evidence
+        )
+
         super().__init__(
             node_id,
             "evidence",
-            evidence=evidence,
+            evidence=evidence_text,
+            description=evidence_text,
+            method=method,
+            value=value,
+            finding_indices=(
+                finding_indices if finding_indices is not None else []
+            ),
             **attributes
         )
+
 
 
 class ModelNode(Node):

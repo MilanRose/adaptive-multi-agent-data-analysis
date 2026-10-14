@@ -1,4 +1,3 @@
-
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
@@ -7,6 +6,7 @@ class Evidence(BaseModel):
     description: str
     method: Optional[str] = None
     value: Optional[Any] = None
+    finding_indices: List[int] = Field(default_factory=list)
 
 
 class ModelResult(BaseModel):

@@ -1,143 +1,117 @@
 from app.knowledge_graph.graph import KnowledgeGraph
-
 from app.knowledge_graph.nodes import (
     DatasetNode,
     FeatureNode,
     FindingNode,
     EvidenceNode,
-    ModelNode
+    ModelNode,
 )
-
 from app.knowledge_graph.reasoning import GraphReasoner
 
 
-# -------------------------
-# Create Knowledge Graph
-# -------------------------
+def test_knowledge_graph():
+    # 1. Create a fresh knowledge graph
+    kg = KnowledgeGraph()
 
-kg = KnowledgeGraph()
+    # 2. Create graph nodes
+    dataset = DatasetNode(
+        "dataset_1",
+        "customer_churn.csv"
+    )
 
+    feature = FeatureNode(
+        "feature_1",
+        "MonthlyCharges"
+    )
 
-# -------------------------
-# Create Nodes
-# -------------------------
+    finding = FindingNode(
+        "finding_1",
+        "MonthlyCharges is associated with churn",
+        confidence=0.84
+    )
 
-dataset = DatasetNode(
-    "dataset_1",
-    "customer_churn.csv"
-)
+    evidence = EvidenceNode(
+        "evidence_1",
+        "Pearson correlation = 0.42",
+        method="Pearson correlation"
+    )
 
-feature = FeatureNode(
-    "feature_1",
-    "MonthlyCharges"
-)
+    model = ModelNode(
+        "model_1",
+        "Random Forest",
+        accuracy=0.87
+    )
 
-finding = FindingNode(
-    "finding_1",
-    "MonthlyCharges is associated with churn",
-    confidence=0.84
-)
+    # 3. Add nodes to the graph
+    kg.add_node_object(dataset)
+    kg.add_node_object(feature)
+    kg.add_node_object(finding)
+    kg.add_node_object(evidence)
+    kg.add_node_object(model)
 
-evidence = EvidenceNode(
-    "evidence_1",
-    "Pearson correlation = 0.42",
-    method="Pearson correlation"
-)
+    # Verify that all five nodes were added
+    expected_node_ids = {
+        "dataset_1",
+        "feature_1",
+        "finding_1",
+        "evidence_1",
+        "model_1",
+    }
 
-model = ModelNode(
-    "model_1",
-    "Random Forest",
-    accuracy=0.87
-)
+    assert expected_node_ids.issubset(set(kg.graph.nodes))
 
+    # 4. Add relationships
+    kg.add_relationship("dataset_1", "contains", "feature_1")
+    kg.add_relationship("feature_1", "supports", "finding_1")
+    kg.add_relationship("finding_1", "supported_by", "evidence_1")
+    kg.add_relationship("finding_1", "generated_by", "model_1")
 
-# -------------------------
-# Add Nodes to Graph
-# -------------------------
+    # Verify that each relationship exists
+    expected_relationships = [
+        ("dataset_1", "feature_1", "contains"),
+        ("feature_1", "finding_1", "supports"),
+        ("finding_1", "evidence_1", "supported_by"),
+        ("finding_1", "model_1", "generated_by"),
+    ]
 
-kg.add_node_object(dataset)
-kg.add_node_object(feature)
-kg.add_node_object(finding)
-kg.add_node_object(evidence)
-kg.add_node_object(model)
+    for source, target, relation in expected_relationships:
+        matching_edges = [
+            data
+            for _, _, data in kg.graph.edges(
+                source,
+                data=True
+            )
+            if data.get("relation") == relation
+            and _ == target
+        ]
 
+        assert matching_edges, (
+            f"Missing relationship: {source} -[{relation}]-> {target}"
+        )
 
-# -------------------------
-# Add Relationships
-# -------------------------
+    # 5. Test graph reasoning
+    reasoner = GraphReasoner(kg)
 
-kg.add_relationship(
-    "dataset_1",
-    "contains",
-    "feature_1"
-)
+    evidence_results = reasoner.get_supporting_evidence("finding_1")
 
-kg.add_relationship(
-    "feature_1",
-    "supports",
-    "finding_1"
-)
+    assert evidence_results, "No supporting evidence was returned"
+    assert any(
+        item.get("evidence_id") == "evidence_1"
+        for item in evidence_results
+    ), "The expected evidence was not returned"
 
-kg.add_relationship(
-    "finding_1",
-    "supported_by",
-    "evidence_1"
-)
+    # 6. Verify finding context
+    context = reasoner.get_finding_context("finding_1")
 
-kg.add_relationship(
-    "finding_1",
-    "generated_by",
-    "model_1"
-)
+    assert context["features"], "No feature context was returned"
+    assert context["datasets"], "No dataset context was returned"
+    assert "feature_1" in context["features"]
+    assert "dataset_1" in context["datasets"]
 
+    # 7. Verify provenance
+    provenance = reasoner.get_provenance_chain("finding_1")
 
-# -------------------------
-# Display Graph
-# -------------------------
+    assert provenance["evidence"], "Evidence provenance is missing"
+    assert provenance["models"], "Model provenance is missing"
 
-print("\nNODES:")
-
-for node in kg.graph.nodes(data=True):
-    print(node)
-
-
-print("\nRELATIONSHIPS:")
-
-for edge in kg.graph.edges(data=True):
-    print(edge)
-
-
-# -------------------------
-# Graph Reasoning
-# -------------------------
-
-reasoner = GraphReasoner(kg)
-
-evidence_results = reasoner.get_supporting_evidence(
-    "finding_1"
-)
-
-print("\nSUPPORTING EVIDENCE:")
-
-for item in evidence_results:
-    print(item)
-    
-context = reasoner.get_finding_context(
-    "finding_1"
-)
-
-print("\nFINDING CONTEXT:")
-
-print(context)
-
-# -------------------------
-# Provenance Chain
-# -------------------------
-
-provenance = reasoner.get_provenance_chain(
-    "finding_1"
-)
-
-print("\nPROVENANCE CHAIN:")
-
-print(provenance)
+    print("KNOWLEDGE GRAPH TEST PASSED")

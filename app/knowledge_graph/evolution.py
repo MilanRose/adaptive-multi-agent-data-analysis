@@ -1,389 +1,207 @@
+
+import math
+
+from app.knowledge_graph.graph import GRAPH_LOCK
+
+
 class SelfEvolutionEngine:
 
     def __init__(self, knowledge_graph):
         self.kg = knowledge_graph
 
-    # ---------------------------------------------------------
-    # 1. EVALUATE AN EXECUTION
-    # ---------------------------------------------------------
-
     def evaluate_execution(self, result, verification):
-
         checks = verification.get("checks", {})
-
-        verification_passed = verification.get(
-            "verified",
-            False
-        )
+        verification_passed = verification.get("verified", False)
 
         confidence = result.confidence
 
-        model_performance = None
-
-        if result.model:
-            metrics = result.model.metrics
-
-            if "accuracy" in metrics:
-                model_performance = metrics["accuracy"]
-
-        successful = (
-            verification_passed
-            and confidence >= 0.7
+        # Validate confidence before using it.
+        valid_confidence = (
+            isinstance(confidence, (int, float))
+            and not isinstance(confidence, bool)
+            and math.isfinite(confidence)
+            and 0.0 <= confidence <= 1.0
         )
 
-        if model_performance is not None:
-            successful = (
-                successful
-                and model_performance >= 0.7
+        model_performance = None
+        if result.model:
+            model_performance = result.model.metrics.get("accuracy")
+
+        valid_model_performance = (
+            model_performance is None
+            or (
+                isinstance(model_performance, (int, float))
+                and not isinstance(model_performance, bool)
+                and math.isfinite(model_performance)
+                and 0.0 <= model_performance <= 1.0
             )
+        )
+
+        successful = (
+            verification_passed is True
+            and valid_confidence
+            and confidence >= 0.7
+            and valid_model_performance
+        )
+
+        if model_performance is not None and valid_model_performance:
+            successful = successful and model_performance >= 0.7
 
         return {
-            "successful": successful,
+            "successful": bool(successful),
             "confidence": confidence,
             "model_performance": model_performance,
             "verification_passed": verification_passed,
             "checks": checks
         }
 
-    # ---------------------------------------------------------
-    # 2. STORE EXECUTION HISTORY
-    # ---------------------------------------------------------
-
     def update_knowledge(self, result, evaluation, finding_ids):
-        # Generate a unique execution ID
-        execution_number = 1
+        with GRAPH_LOCK:
+            execution_number = 1
 
-        while f"execution_{execution_number}" in self.kg.graph.nodes:
-            execution_number += 1
+            while f"execution_{execution_number}" in self.kg.graph.nodes:
+                execution_number += 1
 
-        execution_id = f"execution_{execution_number}"
+            execution_id = f"execution_{execution_number}"
 
-        # Store execution history
-        self.kg.add_node(
-            execution_id,
-            "execution",
-            agent=result.agent,
-            task=result.task,
-            dataset=result.dataset,
-            successful=evaluation["successful"],
-            confidence=evaluation["confidence"],
-            model_performance=evaluation["model_performance"],
-            verification_passed=evaluation["verification_passed"]
-        )
+            self.kg.add_node(
+                execution_id,
+                "execution",
+                agent=result.agent,
+                task=result.task,
+                dataset=result.dataset,
+                successful=evaluation["successful"],
+                confidence=evaluation["confidence"],
+                model_performance=evaluation["model_performance"],
+                verification_passed=evaluation["verification_passed"]
+            )
 
-        # Link only to findings created by this exact result
-        for finding_id in finding_ids:
-            if (
-                finding_id in self.kg.graph.nodes
-                and self.kg.graph.nodes[finding_id].get("type") == "finding"
-            ):
-                self.kg.add_relationship(
-                    execution_id,
-                    "produced",
-                    finding_id
-                )
+            for finding_id in finding_ids:
+                if (
+                    finding_id in self.kg.graph.nodes
+                    and self.kg.graph.nodes[finding_id].get("type")
+                    == "finding"
+                ):
+                    self.kg.add_relationship(
+                        execution_id,
+                        "produced",
+                        finding_id
+                    )
 
-        return execution_id
+            return execution_id
 
-    # ---------------------------------------------------------
-    # 3. GET SUCCESSFUL EXECUTIONS
-    # ---------------------------------------------------------
+    def _get_executions(self, successful=None, task=None, dataset=None):
+        with GRAPH_LOCK:
+            executions = []
+
+            for node_id, data in self.kg.graph.nodes(data=True):
+                if data.get("type") != "execution":
+                    continue
+
+                if task is not None and data.get("task") != task:
+                    continue
+
+                if dataset is not None and data.get("dataset") != dataset:
+                    continue
+
+                if (
+                    successful is not None
+                    and data.get("successful") is not successful
+                ):
+                    continue
+
+                executions.append({
+                    "execution_id": node_id,
+                    "agent": data.get("agent"),
+                    "task": data.get("task"),
+                    "dataset": data.get("dataset"),
+                    "successful": data.get("successful"),
+                    "confidence": data.get("confidence"),
+                    "model_performance": data.get("model_performance")
+                })
+
+            return executions
 
     def get_successful_executions(self):
-
-        successful_executions = []
-
-        for node_id, data in self.kg.graph.nodes(data=True):
-
-            if data.get("type") == "execution":
-
-                if data.get("successful") is True:
-
-                    successful_executions.append({
-                        "execution_id": node_id,
-                        "agent": data.get("agent"),
-                        "task": data.get("task"),
-                        "dataset": data.get("dataset"),
-                        "confidence": data.get("confidence"),
-                        "model_performance": data.get(
-                            "model_performance"
-                        )
-                    })
-
-        return successful_executions
-
-    # ---------------------------------------------------------
-    # 4. GET FAILED EXECUTIONS
-    # ---------------------------------------------------------
+        return self._get_executions(successful=True)
 
     def get_failed_executions(self):
+        return self._get_executions(successful=False)
 
-        failed_executions = []
+    def find_similar_executions(self, task, dataset=None):
+        return self._get_executions(task=task, dataset=dataset)
 
-        for node_id, data in self.kg.graph.nodes(data=True):
+    def _recommend(self, task, dataset=None):
+        executions = self.find_similar_executions(task)
 
-            if data.get("type") == "execution":
-
-                if data.get("successful") is False:
-
-                    failed_executions.append({
-                        "execution_id": node_id,
-                        "agent": data.get("agent"),
-                        "task": data.get("task"),
-                        "dataset": data.get("dataset"),
-                        "confidence": data.get("confidence"),
-                        "model_performance": data.get(
-                            "model_performance"
-                        )
-                    })
-
-        return failed_executions
-
-    # ---------------------------------------------------------
-    # 5. FIND SIMILAR EXECUTIONS
-    # ---------------------------------------------------------
-
-    def find_similar_executions(self, task):
-
-        similar_executions = []
-
-        for node_id, data in self.kg.graph.nodes(data=True):
-
-            if data.get("type") == "execution":
-
-                if data.get("task") == task:
-
-                    similar_executions.append({
-                        "execution_id": node_id,
-                        "agent": data.get("agent"),
-                        "task": data.get("task"),
-                        "dataset": data.get("dataset"),
-                        "confidence": data.get("confidence"),
-                        "model_performance": data.get(
-                            "model_performance"
-                        ),
-                        "successful": data.get("successful")
-                    })
-
-        return similar_executions
-
-    # ---------------------------------------------------------
-    # 6. RECOMMEND WORKFLOW
-    # ---------------------------------------------------------
-
-    def recommend_workflow(self, task):
-
-        similar_executions = self.find_similar_executions(task)
-
-        if not similar_executions:
-
-            return {
-                "recommended_agent": None,
-                "task": task,
-                "reason": "No previous execution found."
+        if dataset is not None:
+            executions = [
+                execution for execution in executions
+                if execution["dataset"] == dataset
+            ]
+        else:
+            datasets = {
+                execution["dataset"]
+                for execution in executions
             }
 
-        successful_executions = [
-            execution
-            for execution in similar_executions
-            if execution["successful"] is True
-        ]
+            if len(datasets) > 1:
+                return {
+                    "recommended_agent": None,
+                    "task": task,
+                    "dataset": None,
+                    "reason": (
+                        "Multiple datasets have execution history for this "
+                        "task. Specify a dataset to avoid mixing histories."
+                    )
+                }
 
-        failed_executions = [
-            execution
-            for execution in similar_executions
-            if execution["successful"] is False
-        ]
-
-        if not successful_executions:
-
-            return {
-                "recommended_agent": None,
-                "task": task,
-                "reason": (
-                    "No successful previous execution found."
-                ),
-                "failed_agents": [
-                    execution["agent"]
-                    for execution in failed_executions
-                ]
-            }
-
-        # Agents that have failed this task
-        failed_agents = {
-            execution["agent"]
-            for execution in failed_executions
-        }
-
-        # Successful agents that have NOT failed this task
-        available_successful = [
-            execution
-            for execution in successful_executions
-            if execution["agent"] not in failed_agents
-        ]
-
-        # If every successful agent has also failed
-        if not available_successful:
-
-            return {
-                "recommended_agent": None,
-                "task": task,
-                "reason": (
-                    "All previously successful agents "
-                    "also have failed executions for this task."
-                ),
-                "failed_agents": list(failed_agents)
-            }
-
-        # Select the best performing successful agent
-        best_execution = max(
-            available_successful,
-            key=lambda execution: (
-                execution["model_performance"]
-                if execution["model_performance"] is not None
-                else execution["confidence"]
-            )
-        )
-
-        return {
-            "recommended_agent": best_execution["agent"],
-            "task": best_execution["task"],
-            "reason": (
-                "Recommended based on previous successful "
-                "executions while avoiding agents that "
-                "previously failed this task."
-            ),
-            "model_performance": best_execution[
-                "model_performance"
-            ],
-            "confidence": best_execution[
-                "confidence"
-            ],
-            "failed_agents": list(failed_agents)
-        }
-
-    # ---------------------------------------------------------
-    # 7. GET RECOMMENDED AGENT
-    # ---------------------------------------------------------
-
-    def get_recommended_agent(self, task):
-
-        recommendation = self.recommend_workflow(task)
-
-        if recommendation is None:
-            return None
-
-        return recommendation.get(
-            "recommended_agent"
-        )
-
-    # ---------------------------------------------------------
-    # 8. ADAPTIVE AGENT RECOMMENDATION
-    # ---------------------------------------------------------
-
-    def recommend_agent(self, task):
-
-        executions = []
-
-        # Collect previous executions for this task
-        for node_id, data in self.kg.graph.nodes(data=True):
-
-            if data.get("type") == "execution":
-
-                if data.get("task") == task:
-
-                    executions.append({
-                        "agent": data.get("agent"),
-                        "successful": data.get("successful"),
-                        "confidence": data.get("confidence"),
-                        "model_performance": data.get(
-                            "model_performance"
-                        )
-                    })
-
-        # -----------------------------------------------------
-        # No history
-        # -----------------------------------------------------
+            if len(datasets) == 1:
+                dataset = next(iter(datasets))
 
         if not executions:
-
             return {
                 "recommended_agent": None,
                 "task": task,
+                "dataset": dataset,
                 "reason": (
-                    "No previous execution found. "
-                    "A new agent selection is required."
+                    "No previous execution found for this task and dataset."
                 )
             }
 
-        # -----------------------------------------------------
-        # Separate successful and failed executions
-        # -----------------------------------------------------
-
         successful = [
-            execution
-            for execution in executions
+            execution for execution in executions
             if execution["successful"] is True
         ]
 
         failed = [
-            execution
-            for execution in executions
+            execution for execution in executions
             if execution["successful"] is False
         ]
 
         failed_agents = {
-            execution["agent"]
-            for execution in failed
+            execution["agent"] for execution in failed
         }
 
-        # -----------------------------------------------------
-        # No successful agent
-        # -----------------------------------------------------
-
-        if not successful:
-
-            return {
-                "recommended_agent": None,
-                "task": task,
-                "reason": (
-                    "No successful previous execution found."
-                ),
-                "failed_agents": list(failed_agents)
-            }
-
-        # -----------------------------------------------------
-        # Remove agents that previously failed
-        # -----------------------------------------------------
-
-        available_agents = [
-            execution
-            for execution in successful
+        available = [
+            execution for execution in successful
             if execution["agent"] not in failed_agents
+            and isinstance(execution["confidence"], (int, float))
+            and not isinstance(execution["confidence"], bool)
+            and math.isfinite(execution["confidence"])
         ]
 
-        # -----------------------------------------------------
-        # All successful agents have also failed
-        # -----------------------------------------------------
-
-        if not available_agents:
-
+        if not available:
             return {
                 "recommended_agent": None,
                 "task": task,
-                "reason": (
-                    "All previously successful agents "
-                    "also have failed executions for this task."
-                ),
-                "failed_agents": list(failed_agents)
+                "dataset": dataset,
+                "reason": "No eligible successful execution is available.",
+                "failed_agents": sorted(failed_agents)
             }
 
-        # -----------------------------------------------------
-        # Select best remaining agent
-        # -----------------------------------------------------
-
         best = max(
-            available_agents,
+            available,
             key=lambda execution: (
                 execution["model_performance"]
                 if execution["model_performance"] is not None
@@ -394,12 +212,24 @@ class SelfEvolutionEngine:
         return {
             "recommended_agent": best["agent"],
             "task": task,
+            "dataset": dataset,
             "reason": (
-                "Recommended based on previous successful "
-                "executions while avoiding agents that "
-                "previously failed this task."
+                "Recommended based on model performance when available, "
+                "otherwise confidence, while excluding agents with failed "
+                "executions in the selected task and dataset history."
             ),
             "confidence": best["confidence"],
             "model_performance": best["model_performance"],
-            "failed_agents": list(failed_agents)
+            "failed_agents": sorted(failed_agents)
         }
+
+    def recommend_workflow(self, task, dataset=None):
+        return self._recommend(task, dataset)
+
+    def get_recommended_agent(self, task, dataset=None):
+        return self.recommend_workflow(
+            task, dataset
+        ).get("recommended_agent")
+
+    def recommend_agent(self, task, dataset=None):
+        return self._recommend(task, dataset)

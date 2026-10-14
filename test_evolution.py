@@ -1,21 +1,29 @@
-
 from app.knowledge_graph.graph import KnowledgeGraph
 from app.knowledge_graph.builder import KnowledgeGraphBuilder
 from app.knowledge_graph.evolution import SelfEvolutionEngine
 from app.schemas import AgentResult, Evidence, ModelResult
 
 
-def create_result(agent, task, finding, evidence_description, confidence, accuracy):
+def create_result(
+    agent,
+    task,
+    finding,
+    evidence_description,
+    confidence,
+    accuracy,
+    dataset="customer_churn.csv"
+):
     return AgentResult(
         agent=agent,
-        dataset="customer_churn.csv",
+        dataset=dataset,
         task=task,
         findings=[finding],
         evidence=[
             Evidence(
                 description=evidence_description,
                 method="Test evidence",
-                value=0.42
+                value=0.42,
+                finding_indices=[0]
             )
         ],
         model=ModelResult(
@@ -26,31 +34,15 @@ def create_result(agent, task, finding, evidence_description, confidence, accura
     )
 
 
-def main():
-    kg = KnowledgeGraph()
-    builder = KnowledgeGraphBuilder(kg)
-    evolution = SelfEvolutionEngine(kg)
-
-    # --------------------------------------------------
-    # 1. Successful EDA execution
-    # --------------------------------------------------
-    result = create_result(
-        agent="EDAAgent",
-        task="correlation_analysis",
-        finding="MonthlyCharges is associated with churn",
-        evidence_description="Pearson correlation = 0.42",
-        confidence=0.84,
-        accuracy=0.87
-    )
-
+def store_execution(kg, builder, evolution, result, verified=True):
     finding_ids = builder.add_agent_result(result)
 
     verification = {
-        "verified": True,
+        "verified": verified,
         "checks": {
             "finding_exists": True,
             "has_confidence": True,
-            "has_evidence": True,
+            "has_evidence": verified,
             "has_model": True,
             "valid_confidence": True,
             "valid_model_accuracy": True
@@ -62,23 +54,35 @@ def main():
         result, evaluation, finding_ids
     )
 
-    print("SUCCESSFUL EXECUTION:", execution_id)
-    print("FINDINGS:", finding_ids)
-    print("EXECUTION NODE:", kg.get_node(execution_id))
+    return execution_id, finding_ids
+
+
+def test_evolution():
+    kg = KnowledgeGraph()
+    builder = KnowledgeGraphBuilder(kg)
+    evolution = SelfEvolutionEngine(kg)
+
+    # 1. Store a successful EDA execution
+    result = create_result(
+        agent="EDAAgent",
+        task="correlation_analysis",
+        finding="MonthlyCharges is associated with churn",
+        evidence_description="Pearson correlation = 0.42",
+        confidence=0.84,
+        accuracy=0.87
+    )
+
+    execution_id, finding_ids = store_execution(
+        kg, builder, evolution, result
+    )
 
     assert kg.graph.has_edge(execution_id, finding_ids[0])
     assert any(
-        data.get("relation") == "produced"
-        for _, _, data in kg.graph.edges(
-            execution_id,
-            data=True
-        )
-        if _ == finding_ids[0]
+        target == finding_ids[0] and data.get("relation") == "produced"
+        for _, target, data in kg.graph.out_edges(execution_id, data=True)
     )
 
-    # --------------------------------------------------
-    # 2. Failed ML execution
-    # --------------------------------------------------
+    # 2. Store a failed ML execution for the same task and dataset
     failed_result = create_result(
         agent="MLAgent",
         task="correlation_analysis",
@@ -88,58 +92,125 @@ def main():
         accuracy=0.4
     )
 
-    failed_finding_ids = builder.add_agent_result(failed_result)
-
-    failed_verification = {
-        "verified": False,
-        "checks": {
-            "finding_exists": True,
-            "has_confidence": True,
-            "has_evidence": False,
-            "has_model": True,
-            "valid_confidence": True,
-            "valid_model_accuracy": True
-        }
-    }
-
-    failed_evaluation = evolution.evaluate_execution(
-        failed_result, failed_verification
+    failed_execution_id, failed_finding_ids = store_execution(
+        kg, builder, evolution, failed_result, verified=False
     )
-
-    failed_execution_id = evolution.update_knowledge(
-        failed_result, failed_evaluation, failed_finding_ids
-    )
-
-    print("\nFAILED EXECUTION:", failed_execution_id)
-    print("FINDINGS:", failed_finding_ids)
 
     assert kg.graph.has_edge(failed_execution_id, failed_finding_ids[0])
-    assert any(
-        data.get("relation") == "produced"
-        for source, target, data in kg.graph.edges(
-            failed_execution_id,
-            data=True
-        )
-        if target == failed_finding_ids[0]
-    )
 
-    # --------------------------------------------------
     # 3. Verify exact provenance
-    # --------------------------------------------------
     assert not kg.graph.has_edge(execution_id, failed_finding_ids[0])
     assert not kg.graph.has_edge(failed_execution_id, finding_ids[0])
 
-    print("\nSUCCESSFUL EXECUTIONS:")
-    print(evolution.get_successful_executions())
+    # 4. Verify recommendation for the existing task and dataset
+    recommendation = evolution.recommend_workflow(
+        "correlation_analysis",
+        dataset="customer_churn.csv"
+    )
 
-    print("\nFAILED EXECUTIONS:")
-    print(evolution.get_failed_executions())
+    assert recommendation["recommended_agent"] == "EDAAgent"
+    assert recommendation["confidence"] == 0.84
+    assert recommendation["model_performance"] == 0.87
 
-    print("\nWORKFLOW RECOMMENDATION:")
-    print(evolution.recommend_workflow("correlation_analysis"))
+    # 5. Regression test: another dataset must not affect the recommendation
+    other_result = create_result(
+        agent="OtherDatasetAgent",
+        task="correlation_analysis",
+        finding="Finding from another dataset",
+        evidence_description="Other dataset evidence",
+        confidence=0.99,
+        accuracy=0.99,
+        dataset="different_dataset.csv"
+    )
 
-    print("\nPROVENANCE TEST PASSED")
+    store_execution(kg, builder, evolution, other_result)
+
+    isolated_recommendation = evolution.recommend_workflow(
+        "correlation_analysis",
+        dataset="customer_churn.csv"
+    )
+
+    assert isolated_recommendation["recommended_agent"] == "EDAAgent"
+    assert isolated_recommendation["confidence"] == 0.84
+
+    assert evolution.get_recommended_agent(
+        "correlation_analysis",
+        dataset="customer_churn.csv"
+    ) == "EDAAgent"
+
+    assert evolution.find_similar_executions(
+        "correlation_analysis",
+        dataset="customer_churn.csv"
+    )
+    assert all(
+        execution["dataset"] == "customer_churn.csv"
+        for execution in evolution.find_similar_executions(
+            "correlation_analysis",
+            dataset="customer_churn.csv"
+        )
+    )
+
+    # 6. Without a dataset filter, legacy calls remain supported
+
+    # 6. Without a dataset filter, ambiguous history must not be mixed.
+    legacy_recommendation = evolution.recommend_workflow(
+        "correlation_analysis"
+    )
+
+    assert legacy_recommendation["recommended_agent"] is None
+    assert "Multiple datasets" in legacy_recommendation["reason"]
 
 
-if __name__ == "__main__":
-    main()
+    print("EVOLUTION AND DATASET-ISOLATION TEST PASSED")
+
+def test_recommendation_without_execution_history():
+    kg = KnowledgeGraph()
+    evolution = SelfEvolutionEngine(kg)
+
+    recommendation = evolution.recommend_workflow(
+        "correlation_analysis"
+    )
+
+    assert recommendation["recommended_agent"] is None
+    assert recommendation["dataset"] is None
+    assert "No previous execution" in recommendation["reason"]
+
+
+def test_recommendation_prefers_higher_model_performance():
+    kg = KnowledgeGraph()
+    builder = KnowledgeGraphBuilder(kg)
+    evolution = SelfEvolutionEngine(kg)
+
+    first_result = create_result(
+        agent="EDAAgent",
+        task="correlation_analysis",
+        finding="Finding from EDA",
+        evidence_description="EDA evidence",
+        confidence=0.95,
+        accuracy=0.80
+    )
+
+    store_execution(
+        kg, builder, evolution, first_result
+    )
+
+    second_result = create_result(
+        agent="MLAgent",
+        task="correlation_analysis",
+        finding="Finding from ML",
+        evidence_description="ML evidence",
+        confidence=0.80,
+        accuracy=0.92
+    )
+
+    store_execution(
+        kg, builder, evolution, second_result
+    )
+
+    recommendation = evolution.recommend_workflow(
+        "correlation_analysis",
+        dataset="customer_churn.csv"
+    )
+
+    assert recommendation["recommended_agent"] == "MLAgent"
+    assert recommendation["model_performance"] == 0.92

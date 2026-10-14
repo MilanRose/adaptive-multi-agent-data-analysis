@@ -1,4 +1,3 @@
-
 from app.knowledge_graph.graph import KnowledgeGraph
 from app.knowledge_graph.builder import KnowledgeGraphBuilder
 from app.schemas import AgentResult, Evidence
@@ -10,34 +9,30 @@ def test_model_free_finding():
     kg = KnowledgeGraph()
     builder = KnowledgeGraphBuilder(kg)
 
-    # Create a valid result with evidence but NO model
+    # Create a valid finding with evidence but no ML model
     result = AgentResult(
         agent="EDAAgent",
         dataset="customer_churn.csv",
         task="correlation_analysis",
-        findings=["MonthlyCharges is correlated with churn"],
+        findings=[
+            "MonthlyCharges is correlated with churn"
+        ],
         evidence=[
             Evidence(
                 description="Pearson correlation = 0.42",
                 method="Pearson correlation",
-                value=0.42
+                value=0.42,
+                finding_indices=[0]
             )
         ],
         model=None,
         confidence=0.84
     )
 
-    # Add result to graph
-    builder.add_agent_result(result)
+    # Add the result to the knowledge graph
+    finding_ids = builder.add_agent_result(result)
 
-    # Get the generated finding ID
-    finding_ids = [
-        node_id
-        for node_id, data in kg.graph.nodes(data=True)
-        if data.get("type") == "finding"
-    ]
-
-    assert len(finding_ids) > 0, "No finding was created"
+    assert len(finding_ids) == 1, "Exactly one finding should be created"
 
     finding_id = finding_ids[0]
 
@@ -48,8 +43,15 @@ def test_model_free_finding():
     print("\nMODEL-FREE VERIFICATION RESULT:")
     print(verification)
 
-    assert verification["verified"] is True
+    # A finding with valid evidence does not require an ML model
+    assert verification["verified"] is True, (
+        "A valid finding without an ML model should pass verification"
+    )
+    assert verification["checks"]["finding_exists"] is True
+    assert verification["checks"]["has_confidence"] is True
+    assert verification["checks"]["valid_confidence"] is True
     assert verification["checks"]["has_evidence"] is True
+    assert verification["checks"]["evidence_connected"] is True
     assert verification["checks"]["has_model"] is False
     assert verification["checks"]["valid_model_accuracy"] is True
 
