@@ -65,11 +65,24 @@ def detect_outlier_insights(outlier_results: list, threshold: float = 5.0) -> li
     return insights
 
 
+
 def rank_insights(all_insights: list) -> list:
     """
-    Sorts insights by priority, highest first.
+    Sort insights by priority and assign globally unique IDs
+    across correlation, missingness, and outlier insights.
     """
-    return sorted(all_insights, key=lambda x: x["priority"], reverse=True)
+    ranked = sorted(
+        (dict(insight) for insight in all_insights),
+        key=lambda insight: insight["priority"],
+        reverse=True
+    )
+
+    # Assign IDs after combining and ranking all insight types.
+    for index, insight in enumerate(ranked, start=1):
+        insight["id"] = f"I{index:03d}"
+
+    return ranked
+
 
 
 if __name__ == "__main__":
