@@ -4,6 +4,7 @@ import networkx as nx
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import multiprocessing
 
 import pytest
 
@@ -185,3 +186,64 @@ def test_get_graph_returns_an_isolated_read_only_snapshot():
 
     assert "unexpected_node" not in kg.graph
     assert kg.get_node("finding_1")["metadata"]["tags"] == ["original"]
+
+def _process_add_node_and_save(storage_path, node_id, barrier):
+    """Worker used to test concurrent writes from separate processes."""
+    kg = KnowledgeGraph(storage_path)
+
+    # Ensure both workers loaded the same initial graph.
+    barrier.wait(timeout=20)
+
+    kg.add_node(
+        node_id,
+        "worker_result",
+        worker=node_id,
+    )
+    kg.save()
+
+
+def test_separate_process_saves_preserve_both_workers(tmp_path):
+    storage_path = tmp_path / "multiprocess_graph.json"
+
+    initial_graph = KnowledgeGraph(storage_path)
+    initial_graph.add_node(
+        "seed",
+        "dataset",
+        name="initial.csv",
+    )
+    initial_graph.save()
+
+    context = multiprocessing.get_context("spawn")
+    barrier = context.Barrier(2)
+
+    workers = [
+        context.Process(
+            target=_process_add_node_and_save,
+            args=(str(storage_path), f"worker_{index}", barrier),
+        )
+        for index in range(2)
+    ]
+
+    for worker in workers:
+        worker.start()
+
+    for worker in workers:
+        worker.join(timeout=30)
+
+    try:
+        for worker in workers:
+            assert not worker.is_alive(), "Worker process timed out."
+            assert worker.exitcode == 0, (
+                f"Worker process failed with exit code {worker.exitcode}."
+            )
+    finally:
+        for worker in workers:
+            if worker.is_alive():
+                worker.terminate()
+                worker.join(timeout=5)
+
+    loaded_graph = KnowledgeGraph(storage_path)
+
+    assert "seed" in loaded_graph.graph
+    assert "worker_0" in loaded_graph.graph
+    assert "worker_1" in loaded_graph.graph

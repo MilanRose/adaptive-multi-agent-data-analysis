@@ -3,4 +3,5 @@ __pycache__/
 .venv/
 venv/
 .env
+outputs/knowledge_graph.json.lock
 outputs/knowledge_graph.json
