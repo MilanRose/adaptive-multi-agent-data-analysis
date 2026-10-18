@@ -106,7 +106,6 @@ class SelfEvolutionEngine:
                                 "different execution."
                             )
 
-                        # The same execution already exists.
                         return node_id
 
                 execution_metadata = {
@@ -202,6 +201,7 @@ class SelfEvolutionEngine:
     def _recommend(self, task, dataset=None):
         executions = self.find_similar_executions(task)
 
+        # Keep recommendations isolated to the requested dataset.
         if dataset is not None:
             executions = [
                 execution
@@ -238,27 +238,43 @@ class SelfEvolutionEngine:
                 ),
             }
 
-        successful = [
-            execution
-            for execution in executions
-            if execution["successful"] is True
-        ]
+        # Execution IDs are allocated sequentially by update_knowledge.
+        # Sort numerically so the latest execution for each agent wins.
+        def execution_order(execution):
+            node_id = execution["execution_id"]
+            prefix = "execution_"
 
-        failed = [
-            execution
-            for execution in executions
-            if execution["successful"] is False
-        ]
+            if not node_id.startswith(prefix):
+                return -1
 
+            suffix = node_id[len(prefix):]
+            return int(suffix) if suffix.isdigit() else -1
+
+        executions = sorted(executions, key=execution_order)
+
+        # Keep only each agent's latest outcome for this task and dataset.
+        latest_by_agent = {}
+
+        for execution in executions:
+            agent = execution["agent"]
+
+            if agent is not None:
+                latest_by_agent[agent] = execution
+
+        latest_executions = list(latest_by_agent.values())
+
+        # An agent is currently failed only when its latest execution
+        # was not successful. Earlier failures do not block recovery.
         failed_agents = {
-            execution["agent"]
-            for execution in failed
+            agent
+            for agent, execution in latest_by_agent.items()
+            if execution["successful"] is not True
         }
 
         available = [
             execution
-            for execution in successful
-            if execution["agent"] not in failed_agents
+            for execution in latest_executions
+            if execution["successful"] is True
             and isinstance(execution["confidence"], (int, float))
             and not isinstance(execution["confidence"], bool)
             and math.isfinite(execution["confidence"])
@@ -270,7 +286,7 @@ class SelfEvolutionEngine:
                 "task": task,
                 "dataset": dataset,
                 "reason": (
-                    "No eligible successful execution is available."
+                    "No eligible successful latest execution is available."
                 ),
                 "failed_agents": sorted(failed_agents),
             }
@@ -289,9 +305,9 @@ class SelfEvolutionEngine:
             "task": task,
             "dataset": dataset,
             "reason": (
-                "Recommended based on model performance when available, "
-                "otherwise confidence, while excluding agents with failed "
-                "executions in the selected task and dataset history."
+                "Recommended using each agent's latest execution for the "
+                "selected task and dataset. Agents can recover after a "
+                "later successful execution."
             ),
             "confidence": best["confidence"],
             "model_performance": best["model_performance"],

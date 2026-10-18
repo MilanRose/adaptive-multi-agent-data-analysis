@@ -214,3 +214,46 @@ def test_recommendation_prefers_higher_model_performance():
 
     assert recommendation["recommended_agent"] == "MLAgent"
     assert recommendation["model_performance"] == 0.92
+
+def test_recovered_agent_can_be_recommended_after_later_success():
+    kg = KnowledgeGraph()
+    builder = KnowledgeGraphBuilder(kg)
+    evolution = SelfEvolutionEngine(kg)
+
+    # First, EDAAgent fails.
+    failed_result = create_result(
+        agent="EDAAgent",
+        task="correlation_analysis",
+        finding="Initial unsuccessful analysis",
+        evidence_description="Insufficient evidence",
+        confidence=0.4,
+        accuracy=0.4,
+    )
+
+    store_execution(
+        kg, builder, evolution, failed_result, verified=False
+    )
+
+    # The same agent later succeeds at the same task and dataset.
+    recovered_result = create_result(
+        agent="EDAAgent",
+        task="correlation_analysis",
+        finding="Recovered correlation analysis",
+        evidence_description="Pearson correlation = 0.42",
+        confidence=0.84,
+        accuracy=0.87,
+    )
+
+    store_execution(
+        kg, builder, evolution, recovered_result, verified=True
+    )
+
+    recommendation = evolution.recommend_workflow(
+        "correlation_analysis",
+        dataset="customer_churn.csv",
+    )
+
+    assert recommendation["recommended_agent"] == "EDAAgent"
+    assert recommendation["confidence"] == 0.84
+    assert recommendation["model_performance"] == 0.87
+    assert recommendation["failed_agents"] == []
