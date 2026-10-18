@@ -5,7 +5,7 @@ from app.knowledge_graph.builder import KnowledgeGraphBuilder
 from app.verification.fact_checker import FactChecker
 
 
-def test_analysis_result_reaches_knowledge_graph_and_fact_checker():
+def test_correlation_result_reaches_knowledge_graph_and_fact_checker():
     raw_result = {
         "task_id": "T001",
         "task": "investigate_correlation",
@@ -19,9 +19,9 @@ def test_analysis_result_reaches_knowledge_graph_and_fact_checker():
     agent_result = analysis_result_to_agent_result(
         raw_result,
         dataset="titanic.csv",
-        confidence=0.9,  # Test fixture only, not a production policy.
     )
 
+    assert agent_result.confidence == 0.9
     assert agent_result.findings
     assert agent_result.evidence[0].finding_indices == [0]
     assert agent_result.features == ["Pclass", "Fare"]
@@ -31,7 +31,6 @@ def test_analysis_result_reaches_knowledge_graph_and_fact_checker():
     fact_checker = FactChecker(kg)
 
     finding_ids = builder.add_agent_result(agent_result)
-
     assert len(finding_ids) == 1
 
     verification = fact_checker.verify_finding(finding_ids[0])
@@ -55,7 +54,6 @@ def test_missingness_result_reaches_knowledge_graph_and_fact_checker():
     agent_result = analysis_result_to_agent_result(
         raw_result,
         dataset="titanic.csv",
-        confidence=0.9,
     )
 
     kg = KnowledgeGraph()
@@ -81,7 +79,6 @@ def test_outlier_result_reaches_knowledge_graph_and_fact_checker():
     agent_result = analysis_result_to_agent_result(
         raw_result,
         dataset="titanic.csv",
-        confidence=0.9,
     )
 
     kg = KnowledgeGraph()

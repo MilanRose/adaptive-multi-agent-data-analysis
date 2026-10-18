@@ -84,36 +84,79 @@ def execute_task(df: pd.DataFrame, task: dict) -> dict:
         return {"task_id": task["task_id"], "error": f"Unknown task type: {task_type}"}
 
 
-if __name__ == "__main__":
-    from data_loader import load_dataset
-    from eda import compute_correlations, detect_outliers_iqr
-    from profiler import profile_dataset
-    from insights import (
-        detect_correlation_insights,
-        detect_missingness_insights,
-        detect_outlier_insights,
-        rank_insights,
-    )
-    from planner import build_task_plan
 
-    df = load_dataset("data/titanic.csv")
+def run_analysis(dataset_path="data/titanic.csv"):
+    """Run the analysis pipeline and return its results."""
+
+    if __package__:
+        from .data_loader import load_dataset
+        from .eda import compute_correlations, detect_outliers_iqr
+        from .profiler import profile_dataset
+        from .insights import (
+            detect_correlation_insights,
+            detect_missingness_insights,
+            detect_outlier_insights,
+            rank_insights,
+        )
+        from .planner import build_task_plan
+    else:
+        from data_loader import load_dataset
+        from eda import compute_correlations, detect_outliers_iqr
+        from profiler import profile_dataset
+        from insights import (
+            detect_correlation_insights,
+            detect_missingness_insights,
+            detect_outlier_insights,
+            rank_insights,
+        )
+        from planner import build_task_plan
+
+    df = load_dataset(dataset_path)
     profile = profile_dataset(df)
     correlations = compute_correlations(df)
 
     numeric_cols = df.select_dtypes(include="number").columns.tolist()
-    outlier_results = [detect_outliers_iqr(df, col) for col in numeric_cols]
+    outlier_results = [
+        detect_outliers_iqr(df, column)
+        for column in numeric_cols
+    ]
 
-    corr_insights = detect_correlation_insights(correlations, threshold=0.3)
-    missing_insights = detect_missingness_insights(profile["missing_pct"], threshold=20.0)
-    outlier_insights = detect_outlier_insights(outlier_results, threshold=5.0)
+    corr_insights = detect_correlation_insights(
+        correlations, threshold=0.3
+    )
+    missing_insights = detect_missingness_insights(
+        profile["missing_pct"], threshold=20.0
+    )
+    outlier_insights = detect_outlier_insights(
+        outlier_results, threshold=5.0
+    )
 
-    all_insights = corr_insights + missing_insights + outlier_insights
+    all_insights = (
+        corr_insights + missing_insights + outlier_insights
+    )
     ranked_insights = rank_insights(all_insights)
     task_plan = build_task_plan(ranked_insights)
 
-    print(f"=== Executing {len(task_plan)} tasks ===\n")
-    execution_results = []
-    for task in task_plan:
-        result = execute_task(df, task)
-        execution_results.append(result)
+    execution_results = [
+        execute_task(df, task)
+        for task in task_plan
+    ]
+
+    return {
+        "dataset": str(dataset_path),
+        "profile": profile,
+        "insights": ranked_insights,
+        "tasks": task_plan,
+        "results": execution_results,
+    }
+
+
+if __name__ == "__main__":
+    output = run_analysis()
+
+    print(
+        f"=== Executing {len(output['tasks'])} tasks ===\n"
+    )
+
+    for result in output["results"]:
         print(result)

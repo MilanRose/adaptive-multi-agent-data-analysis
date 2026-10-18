@@ -1,8 +1,8 @@
-
 import math
 from typing import Any
 
 from app.schemas import AgentResult, Evidence
+from app.confidence_policy import estimate_confidence
 
 
 def _to_python_value(value: Any) -> Any:
@@ -26,7 +26,6 @@ def _to_python_value(value: Any) -> Any:
 def analysis_result_to_agent_result(
     result: dict,
     dataset: str,
-    confidence: float,
     agent: str = "EDAAgent",
 ) -> AgentResult:
     """
@@ -49,13 +48,7 @@ def analysis_result_to_agent_result(
     if not isinstance(agent, str) or not agent.strip():
         raise ValueError("Agent must be a non-empty string.")
 
-    if (
-        isinstance(confidence, bool)
-        or not isinstance(confidence, (int, float))
-        or not 0.0 <= confidence <= 1.0
-        or not math.isfinite(confidence)
-    ):
-        raise ValueError("Confidence must be finite and between 0 and 1.")
+
 
     task = result.get("task")
     columns = result.get("columns")
@@ -167,5 +160,5 @@ def analysis_result_to_agent_result(
         findings=[finding],
         features=columns,
         evidence=[evidence],
-        confidence=float(confidence),
+        confidence=estimate_confidence(sample_size),
     )
