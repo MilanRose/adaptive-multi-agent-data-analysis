@@ -1,19 +1,35 @@
-import pandas as pd
-
 import os
+
 import pandas as pd
 import matplotlib.pyplot as plt
 
 
+MAX_CORRELATION_COLUMNS = 200
+
+
+def _bounded_numeric_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Prevent correlation calculations on excessively wide datasets."""
+    numeric_df = df.select_dtypes(include="number")
+
+    if len(numeric_df.columns) > MAX_CORRELATION_COLUMNS:
+        raise ValueError(
+            "Correlation analysis supports at most "
+            f"{MAX_CORRELATION_COLUMNS} numeric columns; "
+            f"found {len(numeric_df.columns)}."
+        )
+
+    return numeric_df
+
 def compute_correlations(df: pd.DataFrame) -> dict:
     """
-    Computes Pearson correlation between all numeric columns.
-    Returns a nested dictionary: {col1: {col2: correlation_value}}
+    Computes Pearson correlation between numeric columns.
+
+    Returns:
+        A nested dictionary: {col1: {col2: correlation_value}}
     """
-    numeric_df = df.select_dtypes(include="number")
+    numeric_df = _bounded_numeric_df(df)
     corr_matrix = numeric_df.corr(method="pearson")
     return corr_matrix.round(3).to_dict()
-
 
 def detect_outliers_iqr(df: pd.DataFrame, column: str) -> dict:
     """
@@ -42,7 +58,7 @@ def plot_correlation_heatmap(df: pd.DataFrame, output_path: str):
     """
     Creates a correlation heatmap for all numeric columns and saves it as an image.
     """
-    numeric_df = df.select_dtypes(include="number")
+    numeric_df = _bounded_numeric_df(df)
     corr_matrix = numeric_df.corr(method="pearson")
 
     fig, ax = plt.subplots(figsize=(8, 6))
