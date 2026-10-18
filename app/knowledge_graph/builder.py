@@ -27,11 +27,32 @@ class KnowledgeGraphBuilder:
                     )
 
         # Find a result number that does not collide with existing findings.
+                # Find a result number that avoids collisions across all
+        # node types created by this result.
         result_number = 1
 
+        def candidate_node_ids(number):
+            node_ids = [
+                f"finding_{number}_{i}"
+                for i in range(1, len(result.findings) + 1)
+            ]
+
+            if result.model is not None:
+                node_ids.extend(
+                    f"model_{number}_{i}"
+                    for i in range(1, len(result.findings) + 1)
+                )
+
+            node_ids.extend(
+                f"evidence_{number}_{i}"
+                for i in range(1, len(result.evidence) + 1)
+            )
+
+            return node_ids
+
         while any(
-            node_id.startswith(f"finding_{result_number}_")
-            for node_id in self.kg.graph.nodes
+            node_id in self.kg.graph
+            for node_id in candidate_node_ids(result_number)
         ):
             result_number += 1
 
