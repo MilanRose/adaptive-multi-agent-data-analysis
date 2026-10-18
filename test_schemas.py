@@ -58,12 +58,8 @@ def test_schemas():
     assert result.model.name == "Random Forest"
 
     # 6. Verify serialization
-    # 6. Verify serialization (Pydantic v1 and v2)
-    if hasattr(result, "model_dump"):
-        serialized = result.model_dump()
-    else:
-        serialized = result.dict
-
+    # 6. Verify serialization using the supported Pydantic v2 API.
+    serialized = result.model_dump()
     assert serialized["agent"] == "EDAAgent"
     assert serialized["confidence"] == 0.84
     assert serialized["evidence"][0]["finding_indices"] == [0]

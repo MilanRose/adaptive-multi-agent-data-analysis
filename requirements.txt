@@ -1,5 +1,5 @@
 networkx
-pydantic
+pydantic>=2,<3
 contourpy==1.4.0
 cycler==0.12.1
 fonttools==4.65.0
