@@ -1,4 +1,4 @@
-
+import uuid
 from pathlib import Path
 
 from app.orchestrator.router import AdaptiveRouter
@@ -54,10 +54,12 @@ class Orchestrator:
         insights=None,
         results=None,
         errors=None,
+        run_id=None,
     ):
         """Return a consistent response shape for every route."""
         return {
             "user_request": user_request,
+            "run_id": run_id,
             "selected_agent": selected_agent,
             "status": status,
             "message": message,
@@ -68,9 +70,30 @@ class Orchestrator:
             "errors": errors or [],
         }
 
-    def process_request(self, user_request):
-        if not isinstance(user_request, str) or not user_request.strip():
-            raise ValueError("user_request must be a non-empty string.")
+    def process_request(self, user_request, run_id=None):
+        """
+        Process a user request.
+
+        Supply the same run_id when retrying the same request.
+        A new run_id represents a new execution.
+        """
+        if (
+            not isinstance(user_request, str)
+            or not user_request.strip()
+        ):
+            raise ValueError(
+                "user_request must be a non-empty string."
+            )
+
+        # Generate an ID for a new run, or validate a retry ID.
+        if run_id is None:
+            run_id = uuid.uuid4().hex
+        elif not isinstance(run_id, str) or not run_id.strip():
+            raise ValueError(
+                "run_id must be a non-empty string."
+            )
+        else:
+            run_id = run_id.strip()
 
         selected_agent = self.router.route(user_request)
 
@@ -85,13 +108,14 @@ class Orchestrator:
                     f"{selected_agent} has been selected, but its execution "
                     "workflow is not yet connected."
                 ),
+                run_id=run_id,
             )
 
         pipeline = run_analysis(str(self.dataset_path))
         converted_results = []
         failed_results = []
 
-        for raw_result in pipeline["results"]:
+        for result_index, raw_result in enumerate(pipeline["results"]):
             if "error" in raw_result:
                 failed_results.append(raw_result)
                 continue
@@ -102,8 +126,17 @@ class Orchestrator:
                 agent=selected_agent,
             )
 
+            # Use the task ID to derive a stable ID for this task's run.
+            # Fall back to the task's position if it has no task ID.
+            raw_task_id = raw_result.get("task_id")
+            if raw_task_id is None:
+                raw_task_id = result_index
+
+            task_run_id = f"{run_id}:{raw_task_id}"
+
             finding_ids = self.graph_builder.add_agent_result(
-                agent_result
+                agent_result,
+                run_id=task_run_id,
             )
 
             verification_results = [
@@ -112,7 +145,6 @@ class Orchestrator:
             ]
 
             # Evaluate the completed task using its verification results.
-            # The adapter currently produces one finding per task.
             verification_summary = {
                 "verified": (
                     bool(verification_results)
@@ -141,10 +173,10 @@ class Orchestrator:
                 agent_result,
                 evaluation,
                 finding_ids,
+                run_id=task_run_id,
             )
 
-            # Persist findings and execution history so a later process
-            # can reload them from the configured storage path.
+            # Persist findings and execution history.
             self.knowledge_graph.save()
 
             converted_results.append({
@@ -184,6 +216,7 @@ class Orchestrator:
             insights=pipeline["insights"],
             results=converted_results,
             errors=failed_results,
+            run_id=run_id,
         )
 
 
@@ -193,13 +226,17 @@ if __name__ == "__main__":
     result = orchestrator.process_request(request)
 
     print("\nRequest:", result["user_request"])
+    print("Run ID:", result["run_id"])
     print("Selected agent:", result["selected_agent"])
     print("Status:", result["status"])
     print("Message:", result["message"])
 
     if result["status"] == "completed":
         print("Tasks executed:", result["task_count"])
-        print("Findings verified:", sum(
-            len(item["finding_ids"])
-            for item in result["results"]
-        ))
+        print(
+            "Findings verified:",
+            sum(
+                len(item["finding_ids"])
+                for item in result["results"]
+            ),
+        )

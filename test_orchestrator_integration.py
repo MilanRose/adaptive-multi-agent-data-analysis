@@ -56,3 +56,53 @@ def test_unsupported_agent_has_consistent_response_fields(tmp_path):
     assert output["insights"] == []
     assert output["results"] == []
     assert output["errors"] == []
+
+def test_retrying_same_run_id_does_not_duplicate_graph_entries(
+    tmp_path,
+):
+    graph_path = tmp_path / "knowledge_graph.json"
+
+    orchestrator = Orchestrator(
+        dataset_path="data/titanic.csv",
+        graph_path=graph_path,
+    )
+
+    request = "Explore correlations and patterns in the Titanic dataset"
+    run_id = "integration-retry-test-001"
+
+    first = orchestrator.process_request(
+        request,
+        run_id=run_id,
+    )
+
+    graph = orchestrator.knowledge_graph.graph
+    first_node_count = graph.number_of_nodes()
+    first_edge_count = graph.number_of_edges()
+
+    first_finding_ids = [
+        item["finding_ids"] for item in first["results"]
+    ]
+
+    second = orchestrator.process_request(
+        request,
+        run_id=run_id,
+    )
+
+    assert first["run_id"] == run_id
+    assert second["run_id"] == run_id
+
+    assert [
+        item["finding_ids"] for item in second["results"]
+    ] == first_finding_ids
+
+    assert graph.number_of_nodes() == first_node_count
+    assert graph.number_of_edges() == first_edge_count
+
+    execution_nodes = [
+        node_id
+        for node_id, data in graph.nodes(data=True)
+        if data.get("type") == "execution"
+    ]
+
+    assert len(execution_nodes) == len(first["results"])
+    assert graph_path.exists()

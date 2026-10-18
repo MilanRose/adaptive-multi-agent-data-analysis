@@ -1,4 +1,5 @@
 import hashlib
+import json
 import re
 
 from app.knowledge_graph.graph import GRAPH_LOCK
@@ -10,11 +11,12 @@ class KnowledgeGraphBuilder:
     def __init__(self, knowledge_graph):
         self.kg = knowledge_graph
 
-    def add_agent_result(self, result: AgentResult):
+    def add_agent_result(self, result: AgentResult, run_id=None):
+        """Add an agent result, optionally making retries idempotent."""
         with GRAPH_LOCK:
-            return self._add_agent_result(result)
+            return self._add_agent_result(result, run_id)
 
-    def _add_agent_result(self, result: AgentResult):
+    def _add_agent_result(self, result: AgentResult, run_id=None):
         # Validate evidence references before modifying the graph.
         for evidence_item in result.evidence:
             for finding_index in evidence_item.finding_indices:
@@ -26,9 +28,101 @@ class KnowledgeGraphBuilder:
                         f"{len(result.findings) - 1}."
                     )
 
-        # Find a result number that does not collide with existing findings.
-                # Find a result number that avoids collisions across all
-        # node types created by this result.
+        run_metadata = {}
+
+        # Check whether this result is a retry of an existing run.
+        if run_id is not None:
+            if not isinstance(run_id, str) or not run_id.strip():
+                raise ValueError(
+                    "run_id must be a non-empty string."
+                )
+
+            run_id = run_id.strip()
+
+            payload = json.dumps(
+                result.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+
+            result_fingerprint = hashlib.sha256(
+                payload.encode("utf-8")
+            ).hexdigest()
+
+            existing_run_nodes = [
+                (node_id, data)
+                for node_id, data in self.kg.graph.nodes(data=True)
+                if data.get("type") in {
+                    "finding",
+                    "model",
+                    "evidence",
+                }
+                and data.get("run_id") == run_id
+            ]
+
+            if existing_run_nodes:
+                # The same ID cannot represent different result data.
+                if any(
+                    data.get("result_fingerprint") != result_fingerprint
+                    for _, data in existing_run_nodes
+                ):
+                    raise ValueError(
+                        "run_id has already been used for different "
+                        "analysis results."
+                    )
+
+                existing_findings = sorted(
+                    (
+                        node_id
+                        for node_id, data in existing_run_nodes
+                        if data.get("type") == "finding"
+                    ),
+                    key=lambda node_id: self.kg.graph.nodes[
+                        node_id
+                    ].get("result_index", 0),
+                )
+
+                # Ensure that the original result was fully stored.
+                expected_model_count = (
+                    len(result.findings)
+                    if result.model is not None
+                    else 0
+                )
+
+                existing_model_count = sum(
+                    1
+                    for _, data in existing_run_nodes
+                    if data.get("type") == "model"
+                )
+
+                existing_evidence_count = sum(
+                    1
+                    for _, data in existing_run_nodes
+                    if data.get("type") == "evidence"
+                )
+
+                counts_match = (
+                    len(existing_findings) == len(result.findings)
+                    and existing_model_count == expected_model_count
+                    and existing_evidence_count == len(result.evidence)
+                )
+
+                if not counts_match:
+                    raise RuntimeError(
+                        "The existing run contains incomplete graph "
+                        "entries. Investigate the graph state before "
+                        "retrying with a new run_id."
+                    )
+
+                return existing_findings
+
+            run_metadata = {
+                "run_id": run_id,
+                "result_fingerprint": result_fingerprint,
+            }
+
+        # Find a result number that avoids node-ID collisions.
         result_number = 1
 
         def candidate_node_ids(number):
@@ -71,7 +165,9 @@ class KnowledgeGraphBuilder:
         for finding_index, finding_description in enumerate(
             result.findings
         ):
-            finding_id = f"finding_{result_number}_{finding_index + 1}"
+            finding_id = (
+                f"finding_{result_number}_{finding_index + 1}"
+            )
 
             self.kg.add_node(
                 finding_id,
@@ -80,11 +176,12 @@ class KnowledgeGraphBuilder:
                 confidence=result.confidence,
                 task=result.task,
                 agent=result.agent,
+                result_index=finding_index,
+                **run_metadata,
             )
 
             created_finding_ids.append(finding_id)
 
-            # Link the dataset directly to the finding.
             self.kg.add_relationship(
                 dataset_id,
                 "contains_finding",
@@ -105,7 +202,6 @@ class KnowledgeGraphBuilder:
                 ):
                     continue
 
-                # Preserve the original ID when it is safe to reuse.
                 legacy_feature_id = (
                     f"feature_{result.dataset}_{feature_name}"
                 )
@@ -126,25 +222,26 @@ class KnowledgeGraphBuilder:
                 ):
                     feature_id = legacy_feature_id
                 else:
-                    # Generate a deterministic ID for a collision.
-                    identity = f"{result.dataset}\0{feature_name}"
+                    identity = (
+                        f"{result.dataset}\0{feature_name}"
+                    )
                     suffix = hashlib.sha256(
                         identity.encode("utf-8")
                     ).hexdigest()[:12]
 
                     feature_id = f"{legacy_feature_id}_{suffix}"
 
-                    # Guard against an existing ID belonging to
-                    # another node or feature.
+                    # Avoid collisions with other existing graph nodes.
                     while feature_id in self.kg.graph:
-                        existing_data = self.kg.graph.nodes[feature_id]
+                        existing_data = self.kg.graph.nodes[
+                            feature_id
+                        ]
 
                         if (
                             existing_data.get("type") == "feature"
                             and existing_data.get("dataset")
                             == result.dataset
-                            and existing_data.get("name")
-                            == feature_name
+                            and existing_data.get("name") == feature_name
                         ):
                             break
 
@@ -156,7 +253,6 @@ class KnowledgeGraphBuilder:
                             f"{legacy_feature_id}_{suffix}"
                         )
 
-                # Create or update the feature node.
                 self.kg.add_node(
                     feature_id,
                     "feature",
@@ -164,14 +260,12 @@ class KnowledgeGraphBuilder:
                     dataset=result.dataset,
                 )
 
-                # Link dataset to feature.
                 self.kg.add_relationship(
                     dataset_id,
                     "contains",
                     feature_id,
                 )
 
-                # Link feature to its finding.
                 self.kg.add_relationship(
                     feature_id,
                     "supports",
@@ -190,6 +284,7 @@ class KnowledgeGraphBuilder:
                     model_name=result.model.name,
                     accuracy=result.model.metrics.get("accuracy"),
                     metrics=result.model.metrics,
+                    **run_metadata,
                 )
 
                 self.kg.add_relationship(
@@ -213,6 +308,7 @@ class KnowledgeGraphBuilder:
                 description=evidence_item.description,
                 method=evidence_item.method,
                 value=evidence_item.value,
+                **run_metadata,
             )
 
             for finding_index in evidence_item.finding_indices:
