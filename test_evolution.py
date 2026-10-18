@@ -257,3 +257,54 @@ def test_recovered_agent_can_be_recommended_after_later_success():
     assert recommendation["confidence"] == 0.84
     assert recommendation["model_performance"] == 0.87
     assert recommendation["failed_agents"] == []
+
+
+def test_recommendation_does_not_compare_accuracy_with_confidence():
+    kg = KnowledgeGraph()
+    builder = KnowledgeGraphBuilder(kg)
+    evolution = SelfEvolutionEngine(kg)
+
+    # This agent has measured model performance.
+    accuracy_result = create_result(
+        agent="AccuracyAgent",
+        task="correlation_analysis",
+        finding="Analysis with measured model performance",
+        evidence_description="Model evaluation evidence",
+        confidence=0.75,
+        accuracy=0.75,
+    )
+
+    store_execution(
+        kg, builder, evolution, accuracy_result
+    )
+
+    # This agent has high confidence but no measured model accuracy.
+    confidence_result = AgentResult(
+        agent="ConfidenceOnlyAgent",
+        dataset="customer_churn.csv",
+        task="correlation_analysis",
+        findings=["Analysis without a model"],
+        evidence=[
+            Evidence(
+                description="Analysis evidence",
+                method="EDA",
+                value=0.9,
+                finding_indices=[0],
+            )
+        ],
+        model=None,
+        confidence=0.99,
+    )
+
+    store_execution(
+        kg, builder, evolution, confidence_result
+    )
+
+    recommendation = evolution.recommend_workflow(
+        "correlation_analysis",
+        dataset="customer_churn.csv",
+    )
+
+    assert recommendation["recommended_agent"] == "AccuracyAgent"
+    assert recommendation["model_performance"] == 0.75
+    assert "model performance" in recommendation["reason"]

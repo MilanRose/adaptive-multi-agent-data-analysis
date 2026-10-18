@@ -291,23 +291,46 @@ class SelfEvolutionEngine:
                 "failed_agents": sorted(failed_agents),
             }
 
-        best = max(
-            available,
-            key=lambda execution: (
-                execution["model_performance"]
-                if execution["model_performance"] is not None
-                else execution["confidence"]
-            ),
-        )
+                # Compare like with like: never rank model accuracy against
+        # confidence, since they represent different measurements.
+        candidates_with_model_performance = [
+            execution
+            for execution in available
+            if (
+                isinstance(
+                    execution["model_performance"],
+                    (int, float),
+                )
+                and not isinstance(
+                    execution["model_performance"],
+                    bool,
+                )
+                and math.isfinite(execution["model_performance"])
+                and 0.0 <= execution["model_performance"] <= 1.0
+            )
+        ]
+
+        if candidates_with_model_performance:
+            best = max(
+                candidates_with_model_performance,
+                key=lambda execution: execution["model_performance"],
+            )
+            ranking_metric = "model performance"
+        else:
+            best = max(
+                available,
+                key=lambda execution: execution["confidence"],
+            )
+            ranking_metric = "confidence"
 
         return {
             "recommended_agent": best["agent"],
             "task": task,
             "dataset": dataset,
-            "reason": (
-                "Recommended using each agent's latest execution for the "
-                "selected task and dataset. Agents can recover after a "
-                "later successful execution."
+                        "reason": (
+                f"Recommended using {ranking_metric} among eligible "
+                "latest successful executions for the selected task "
+                "and dataset."
             ),
             "confidence": best["confidence"],
             "model_performance": best["model_performance"],
