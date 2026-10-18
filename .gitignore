@@ -1,7 +1,6 @@
-@"
 __pycache__/
 *.pyc
 .venv/
 venv/
 .env
-"@ | Set-Content .gitignore
+outputs/knowledge_graph.json
