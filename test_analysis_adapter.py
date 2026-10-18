@@ -1,7 +1,8 @@
+import pytest
 
 from app.analysis_adapter import analysis_result_to_agent_result
-from app.knowledge_graph.graph import KnowledgeGraph
 from app.knowledge_graph.builder import KnowledgeGraphBuilder
+from app.knowledge_graph.graph import KnowledgeGraph
 from app.verification.fact_checker import FactChecker
 
 
@@ -22,7 +23,10 @@ def test_correlation_result_reaches_knowledge_graph_and_fact_checker():
     )
 
     assert agent_result.confidence == 0.9
-    assert agent_result.findings
+    assert agent_result.findings == [
+        "Pearson correlation between Pclass and Fare "
+        "is -0.549 (sample size=891)."
+    ]
     assert agent_result.evidence[0].finding_indices == [0]
     assert agent_result.features == ["Pclass", "Fare"]
 
@@ -56,6 +60,10 @@ def test_missingness_result_reaches_knowledge_graph_and_fact_checker():
         dataset="titanic.csv",
     )
 
+    assert agent_result.findings == [
+        "Column Cabin has 687 missing values (77.10%)."
+    ]
+
     kg = KnowledgeGraph()
     finding_ids = KnowledgeGraphBuilder(kg).add_agent_result(agent_result)
     verification = FactChecker(kg).verify_finding(finding_ids[0])
@@ -81,9 +89,72 @@ def test_outlier_result_reaches_knowledge_graph_and_fact_checker():
         dataset="titanic.csv",
     )
 
+    assert agent_result.findings == [
+        "Column Fare has 116 detected outliers "
+        "(13.02%) using the IQR method."
+    ]
+
     kg = KnowledgeGraph()
     finding_ids = KnowledgeGraphBuilder(kg).add_agent_result(agent_result)
     verification = FactChecker(kg).verify_finding(finding_ids[0])
 
     assert verification["verified"] is True
     assert verification["checks"]["evidence_connected"] is True
+
+
+@pytest.mark.parametrize(
+    "p_value",
+    [
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        -0.01,
+        1.01,
+        "not-a-number",
+        True,
+    ],
+)
+def test_correlation_rejects_invalid_p_values(p_value):
+    raw_result = {
+        "task_id": "T003",
+        "task": "investigate_correlation",
+        "columns": ["Pclass", "Fare"],
+        "method": "Pearson correlation",
+        "value": -0.549,
+        "p_value": p_value,
+        "sample_size": 891,
+    }
+
+    with pytest.raises(ValueError, match="P-value"):
+        analysis_result_to_agent_result(
+            raw_result,
+            dataset="titanic.csv",
+        )
+
+
+@pytest.mark.parametrize(
+    "columns",
+    [
+        ["Fare"],
+        ["Pclass", "Fare", "Age"],
+    ],
+)
+def test_correlation_requires_exactly_two_columns(columns):
+    raw_result = {
+        "task_id": "T004",
+        "task": "investigate_correlation",
+        "columns": columns,
+        "method": "Pearson correlation",
+        "value": -0.549,
+        "p_value": 0.01,
+        "sample_size": 891,
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="exactly two columns",
+    ):
+        analysis_result_to_agent_result(
+            raw_result,
+            dataset="titanic.csv",
+        )
