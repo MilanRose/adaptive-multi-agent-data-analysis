@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 
+import networkx as nx
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -139,3 +140,48 @@ def test_concurrent_saves_preserve_valid_graph_file():
                 "dataset_1",
                 finding_id
             )
+
+def test_get_node_returns_an_independent_copy():
+    kg = KnowledgeGraph()
+
+    kg.add_node(
+        "finding_1",
+        "finding",
+        confidence=0.84,
+        metadata={"tags": ["original"]},
+    )
+
+    node = kg.get_node("finding_1")
+
+    # Changing the returned data must not alter the actual graph.
+    node["confidence"] = 0.1
+    node["metadata"]["tags"].append("external-change")
+
+    actual_node = kg.get_node("finding_1")
+
+    assert actual_node["confidence"] == 0.84
+    assert actual_node["metadata"]["tags"] == ["original"]
+
+
+def test_get_graph_returns_an_isolated_read_only_snapshot():
+    kg = KnowledgeGraph()
+
+    kg.add_node(
+        "finding_1",
+        "finding",
+        metadata={"tags": ["original"]},
+    )
+
+    snapshot = kg.get_graph()
+
+    # The snapshot must not allow topology changes.
+    with pytest.raises(nx.NetworkXError):
+        snapshot.add_node("unexpected_node", type="finding")
+
+    # Its attributes must not mutate the original graph either.
+    snapshot.nodes["finding_1"]["metadata"]["tags"].append(
+        "external-change"
+    )
+
+    assert "unexpected_node" not in kg.graph
+    assert kg.get_node("finding_1")["metadata"]["tags"] == ["original"]
