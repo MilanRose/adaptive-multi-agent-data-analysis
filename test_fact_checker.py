@@ -117,3 +117,89 @@ def test_fact_checker_rejects_extremely_large_integer_model_accuracy():
 
     assert verification["verified"] is False
     assert verification["checks"]["valid_model_accuracy"] is False
+
+def test_fact_checker_explicitly_reports_structural_only_verification():
+    kg = KnowledgeGraph()
+    builder = KnowledgeGraphBuilder(kg)
+
+    result = AgentResult(
+        agent="EDAAgent",
+        dataset="customer_churn.csv",
+        task="correlation_analysis",
+        findings=["MonthlyCharges is associated with churn"],
+        features=["MonthlyCharges"],
+        evidence=[
+            Evidence(
+                description="Pearson correlation = 0.42",
+                method="Pearson correlation",
+                value=0.42,
+                finding_indices=[0],
+            )
+        ],
+        confidence=0.84,
+    )
+
+    finding_ids = builder.add_agent_result(result)
+    verification = FactChecker(kg).verify_finding(finding_ids[0])
+
+    assert verification["verified"] is True
+    assert verification["structural_verified"] is True
+    assert verification["verification_scope"] == "structural_only"
+    assert verification["scientific_support_assessed"] is False
+    assert "not been assessed" in verification["reason"]
+
+
+def test_fact_checker_rejects_empty_evidence_description():
+    kg = KnowledgeGraph()
+
+    kg.add_node(
+        "finding_1",
+        "finding",
+        description="A claim",
+        confidence=0.9,
+    )
+    kg.add_node(
+        "evidence_1",
+        "evidence",
+        description="   ",
+    )
+    kg.add_relationship(
+        "finding_1",
+        "supported_by",
+        "evidence_1",
+    )
+
+    verification = FactChecker(kg).verify_finding("finding_1")
+
+    assert verification["verified"] is False
+    assert verification["checks"]["evidence_connected"] is True
+    assert verification["checks"]["valid_evidence_content"] is False
+
+
+def test_fact_checker_does_not_claim_to_assess_scientific_truth():
+    kg = KnowledgeGraph()
+
+    # Deliberately use contradictory text. The structural checker
+    # cannot determine whether the description supports the finding.
+    kg.add_node(
+        "finding_1",
+        "finding",
+        description="The treatment is effective",
+        confidence=0.9,
+    )
+    kg.add_node(
+        "evidence_1",
+        "evidence",
+        description="The study found no treatment effect.",
+    )
+    kg.add_relationship(
+        "finding_1",
+        "supported_by",
+        "evidence_1",
+    )
+
+    verification = FactChecker(kg).verify_finding("finding_1")
+
+    assert verification["structural_verified"] is True
+    assert verification["scientific_support_assessed"] is False
+    assert verification["verification_scope"] == "structural_only"
