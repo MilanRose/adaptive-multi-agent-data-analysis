@@ -360,9 +360,9 @@ class KnowledgeGraph:
             return
 
         with FileLock(str(source) + ".lock"):
-            loaded_graph = _read_graph(source)
+            with GRAPH_LOCK:
+                loaded_graph = _read_graph(source)
 
-        with GRAPH_LOCK:
-            self.graph = loaded_graph
-            self._baseline_graph = copy.deepcopy(loaded_graph)
-            self._baseline_path = source
+                self.graph = loaded_graph
+                self._baseline_graph = copy.deepcopy(loaded_graph)
+                self._baseline_path = source

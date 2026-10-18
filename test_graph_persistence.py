@@ -5,6 +5,9 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import multiprocessing
+import threading
+
+import app.knowledge_graph.graph as graph_module
 
 import pytest
 
@@ -247,3 +250,77 @@ def test_separate_process_saves_preserve_both_workers(tmp_path):
     assert "seed" in loaded_graph.graph
     assert "worker_0" in loaded_graph.graph
     assert "worker_1" in loaded_graph.graph
+
+def test_load_does_not_overwrite_concurrent_node_addition(
+    tmp_path,
+    monkeypatch,
+):
+    storage_path = tmp_path / "load_race.json"
+
+    saved_graph = KnowledgeGraph(storage_path)
+    saved_graph.add_node("seed", "dataset", name="seed.csv")
+    saved_graph.save()
+
+    live_graph = KnowledgeGraph()
+
+    read_finished = threading.Event()
+    allow_load_to_finish = threading.Event()
+    add_started = threading.Event()
+    errors = []
+
+    original_read_graph = graph_module._read_graph
+
+    def paused_read_graph(path):
+        loaded = original_read_graph(path)
+        read_finished.set()
+
+        if not allow_load_to_finish.wait(timeout=10):
+            raise TimeoutError("Test timed out waiting to finish loading.")
+
+        return loaded
+
+    monkeypatch.setattr(
+        graph_module,
+        "_read_graph",
+        paused_read_graph,
+    )
+
+    def load_graph():
+        try:
+            live_graph.load(storage_path)
+        except Exception as exc:
+            errors.append(exc)
+
+    def add_node():
+        add_started.set()
+        try:
+            live_graph.add_node(
+                "concurrent_finding",
+                "finding",
+                confidence=0.9,
+            )
+        except Exception as exc:
+            errors.append(exc)
+
+    loader = threading.Thread(target=load_graph)
+    loader.start()
+
+    assert read_finished.wait(timeout=5)
+
+    adder = threading.Thread(target=add_node)
+    adder.start()
+
+    try:
+        assert add_started.wait(timeout=5)
+    finally:
+        allow_load_to_finish.set()
+
+    loader.join(timeout=10)
+    adder.join(timeout=10)
+
+    assert not loader.is_alive()
+    assert not adder.is_alive()
+    assert not errors
+
+    assert "seed" in live_graph.graph
+    assert "concurrent_finding" in live_graph.graph
