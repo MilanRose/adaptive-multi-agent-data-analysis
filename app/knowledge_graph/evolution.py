@@ -12,7 +12,12 @@ class SelfEvolutionEngine:
 
     def evaluate_execution(self, result, verification):
         checks = verification.get("checks", {})
-        verification_passed = verification.get("verified", False)
+        # Use structural verification when available.
+        # Fall back to the legacy field for older callers.
+        verification_passed = verification.get(
+            "structural_verified",
+            verification.get("verified", False),
+        )
 
         confidence = result.confidence
 

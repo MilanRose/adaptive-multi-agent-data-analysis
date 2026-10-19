@@ -53,7 +53,8 @@ def test_member3_integration():
     # 4. Verify the finding
     verification = fact_checker.verify_finding(finding_id)
 
-    assert verification["verified"] is True
+    assert verification["verified"] is False
+    assert verification["structural_verified"] is True
     assert verification["checks"]["finding_exists"] is True
     assert verification["checks"]["is_finding"] is True
     assert verification["checks"]["has_evidence"] is True

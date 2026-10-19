@@ -39,7 +39,8 @@ def test_correlation_result_reaches_knowledge_graph_and_fact_checker():
 
     verification = fact_checker.verify_finding(finding_ids[0])
 
-    assert verification["verified"] is True
+    assert verification["verified"] is False
+    assert verification["structural_verified"] is True
     assert verification["checks"]["has_evidence"] is True
     assert verification["checks"]["evidence_connected"] is True
 
@@ -68,7 +69,8 @@ def test_missingness_result_reaches_knowledge_graph_and_fact_checker():
     finding_ids = KnowledgeGraphBuilder(kg).add_agent_result(agent_result)
     verification = FactChecker(kg).verify_finding(finding_ids[0])
 
-    assert verification["verified"] is True
+    assert verification["verified"] is False
+    assert verification["structural_verified"] is True
     assert verification["checks"]["evidence_connected"] is True
 
 
@@ -98,7 +100,8 @@ def test_outlier_result_reaches_knowledge_graph_and_fact_checker():
     finding_ids = KnowledgeGraphBuilder(kg).add_agent_result(agent_result)
     verification = FactChecker(kg).verify_finding(finding_ids[0])
 
-    assert verification["verified"] is True
+    assert verification["verified"] is False
+    assert verification["structural_verified"] is True
     assert verification["checks"]["evidence_connected"] is True
 
 

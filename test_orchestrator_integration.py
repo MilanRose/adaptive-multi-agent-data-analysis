@@ -1,4 +1,3 @@
-
 from app.orchestrator.orchestrator import Orchestrator
 
 
@@ -23,10 +22,20 @@ def test_eda_request_runs_analysis_and_verifies_findings(tmp_path):
     for item in output["results"]:
         assert item["finding_ids"]
         assert item["verification"]
+
+        # Structural validation must pass for every finding.
         assert all(
-            check["verified"]
+            check["structural_verified"] is True
             for check in item["verification"]
         )
+
+        # Scientific support is not assessed by the FactChecker.
+        assert all(
+            check["verified"] is False
+            for check in item["verification"]
+        )
+
+        # Each result must include its execution evaluation.
         assert "evaluation" in item
 
     # A fresh graph instance can reload the saved history.
@@ -56,6 +65,7 @@ def test_unsupported_agent_has_consistent_response_fields(tmp_path):
     assert output["insights"] == []
     assert output["results"] == []
     assert output["errors"] == []
+
 
 def test_retrying_same_run_id_does_not_duplicate_graph_entries(
     tmp_path,

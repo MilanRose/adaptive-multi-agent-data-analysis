@@ -10,8 +10,9 @@ class FactChecker:
     This component checks structural integrity. It does not determine
     whether evidence scientifically proves or entails a finding.
 
-    The legacy 'verified' field remains for compatibility and means
-    structural verification only.
+    The legacy 'verified' field is conservatively kept False because
+    scientific support is not assessed by this component.
+    Use 'structural_verified' to check structural validity.
     """
 
     def __init__(self, knowledge_graph):
@@ -28,6 +29,7 @@ class FactChecker:
         models=None,
     ):
         """Build a consistent verification response."""
+
         structural_verified = all([
             checks["finding_exists"],
             checks["is_finding"],
@@ -42,9 +44,9 @@ class FactChecker:
         return {
             "finding_id": finding_id,
 
-            # Backward-compatible alias: this means structural validity,
-            # not scientific confirmation of the claim.
-            "verified": structural_verified,
+            # Scientific support has not been assessed.
+            # Structural validity alone must not imply scientific truth.
+            "verified": False,
             "structural_verified": structural_verified,
             "verification_scope": "structural_only",
             "scientific_support_assessed": False,
@@ -57,10 +59,12 @@ class FactChecker:
         }
 
     def verify_finding(self, finding_id):
+        """Check the structure and metadata of a finding."""
+
         with GRAPH_LOCK:
             finding_exists = finding_id in self.kg.graph.nodes
 
-            # Start with a consistent check structure for early failures.
+            # Initialize a consistent set of checks for early failures.
             checks = {
                 "finding_exists": finding_exists,
                 "is_finding": False,
@@ -141,7 +145,7 @@ class FactChecker:
             checks["has_confidence"] = has_confidence
             checks["valid_confidence"] = valid_confidence
 
-            # Evidence must be connected to this finding and have
+            # Evidence must be connected to the finding and have
             # a non-empty textual description.
             has_evidence = bool(evidence_ids)
 
@@ -167,7 +171,7 @@ class FactChecker:
             checks["evidence_connected"] = evidence_connected
             checks["valid_evidence_content"] = valid_evidence_content
 
-            # Models are optional, but any connected models must be valid.
+            # Models are optional, but connected models must be valid.
             has_model = bool(model_ids)
             valid_model_accuracy = not invalid_model_targets
 
@@ -195,6 +199,7 @@ class FactChecker:
             checks["has_model"] = has_model
             checks["valid_model_accuracy"] = valid_model_accuracy
 
+            # Determine structural validity only.
             if all([
                 checks["has_confidence"],
                 checks["valid_confidence"],
@@ -211,9 +216,7 @@ class FactChecker:
                 failed_checks = [
                     name
                     for name, passed in checks.items()
-                    if name not in {
-                        "has_model",
-                    }
+                    if name not in {"has_model"}
                     and not passed
                 ]
 

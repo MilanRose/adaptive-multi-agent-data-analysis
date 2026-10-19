@@ -36,7 +36,8 @@ def test_fact_checker():
 
     verification = fact_checker.verify_finding(finding_ids[0])
 
-    assert verification["verified"] is True
+    assert verification["verified"] is False
+    assert verification["structural_verified"] is True
     assert verification["checks"]["has_evidence"] is True
     assert verification["checks"]["evidence_connected"] is True
     assert verification["checks"]["has_model"] is True
@@ -142,7 +143,7 @@ def test_fact_checker_explicitly_reports_structural_only_verification():
     finding_ids = builder.add_agent_result(result)
     verification = FactChecker(kg).verify_finding(finding_ids[0])
 
-    assert verification["verified"] is True
+    assert verification["verified"] is False
     assert verification["structural_verified"] is True
     assert verification["verification_scope"] == "structural_only"
     assert verification["scientific_support_assessed"] is False
@@ -203,3 +204,4 @@ def test_fact_checker_does_not_claim_to_assess_scientific_truth():
     assert verification["structural_verified"] is True
     assert verification["scientific_support_assessed"] is False
     assert verification["verification_scope"] == "structural_only"
+    assert verification["verified"] is False

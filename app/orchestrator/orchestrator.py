@@ -144,23 +144,27 @@ class Orchestrator:
                 for finding_id in finding_ids
             ]
 
-            # Evaluate the completed task using its verification results.
+            # Assess structural validity without claiming scientific proof.
+            structurally_verified = (
+                bool(verification_results)
+                and all(
+                    check.get(
+                        "structural_verified",
+                        check.get("verified", False),
+                    ) is True
+                    for check in verification_results
+                )
+            )
+
             verification_summary = {
-                "verified": (
-                    bool(verification_results)
-                    and all(
-                        check.get("verified") is True
-                        for check in verification_results
-                    )
-                ),
+                "verified": False,
+                "structural_verified": structurally_verified,
+                "verification_scope": "structural_only",
+                "scientific_support_assessed": False,
                 "checks": {
-                    "all_findings_verified": (
-                        bool(verification_results)
-                        and all(
-                            check.get("verified") is True
-                            for check in verification_results
-                        )
-                    )
+                    "all_findings_structurally_verified": (
+                        structurally_verified
+                    ),
                 },
             }
 
@@ -189,11 +193,16 @@ class Orchestrator:
                 "evaluation": evaluation,
             })
 
-        all_verified = (
+        # Determine whether the workflow completed with structurally
+        # valid findings. This does not establish scientific truth.
+        all_structurally_verified = (
             bool(converted_results)
             and not failed_results
             and all(
-                check.get("verified") is True
+                check.get(
+                    "structural_verified",
+                    check.get("verified", False),
+                ) is True
                 for item in converted_results
                 for check in item["verification"]
             )
@@ -201,7 +210,7 @@ class Orchestrator:
 
         if failed_results:
             status = "completed_with_errors"
-        elif all_verified:
+        elif all_structurally_verified:
             status = "completed"
         else:
             status = "completed_with_warnings"
@@ -234,7 +243,7 @@ if __name__ == "__main__":
     if result["status"] == "completed":
         print("Tasks executed:", result["task_count"])
         print(
-            "Findings verified:",
+            "Findings structurally validated:",
             sum(
                 len(item["finding_ids"])
                 for item in result["results"]
