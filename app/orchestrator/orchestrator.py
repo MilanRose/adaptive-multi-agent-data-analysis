@@ -1,8 +1,11 @@
-import uuid
+
 from pathlib import Path
+from uuid import uuid4
 
 from app.orchestrator.router import AdaptiveRouter
 from app.analysis_adapter import analysis_result_to_agent_result
+from app.agents.data_agent import DataAgent
+from app.agents.ml_agent import MLAgent
 from app.knowledge_graph.builder import KnowledgeGraphBuilder
 from app.knowledge_graph.evolution import SelfEvolutionEngine
 from app.knowledge_graph.graph import KnowledgeGraph
@@ -14,7 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Orchestrator:
-    """Route requests and execute the integrated EDA workflow."""
+    """Route requests and execute the connected agent workflows."""
 
     def __init__(
         self,
@@ -26,21 +29,35 @@ class Orchestrator:
         dataset = Path(dataset_path)
         if not dataset.is_absolute():
             dataset = PROJECT_ROOT / dataset
+
         self.dataset_path = dataset
 
         if graph_path is None:
-            graph_path = PROJECT_ROOT / "outputs" / "knowledge_graph.json"
+            graph_path = (
+                PROJECT_ROOT
+                / "outputs"
+                / "knowledge_graph.json"
+            )
 
         self.knowledge_graph = KnowledgeGraph(
             storage_path=graph_path
         )
+
         self.graph_builder = KnowledgeGraphBuilder(
             self.knowledge_graph
         )
-        self.fact_checker = FactChecker(self.knowledge_graph)
+
+        self.fact_checker = FactChecker(
+            self.knowledge_graph
+        )
+
         self.evolution_engine = SelfEvolutionEngine(
             self.knowledge_graph
         )
+
+        # Initialize the implemented agents.
+        self.data_agent = DataAgent()
+        self.ml_agent = MLAgent()
 
     def _response(
         self,
@@ -56,10 +73,10 @@ class Orchestrator:
         errors=None,
         run_id=None,
     ):
-        """Return a consistent response shape for every route."""
+        """Return a consistent response for every workflow."""
+
         return {
             "user_request": user_request,
-            "run_id": run_id,
             "selected_agent": selected_agent,
             "status": status,
             "message": message,
@@ -68,15 +85,82 @@ class Orchestrator:
             "insights": insights or [],
             "results": results or [],
             "errors": errors or [],
+            "run_id": run_id,
         }
 
-    def process_request(self, user_request, run_id=None):
+    def _verify_and_record(
+        self,
+        agent_result,
+        run_id,
+    ):
         """
-        Process a user request.
+        Add the agent's findings to the knowledge graph,
+        run structural checks, and record execution history.
 
-        Supply the same run_id when retrying the same request.
-        A new run_id represents a new execution.
+        Structural verification does not establish scientific truth.
         """
+
+        finding_ids = self.graph_builder.add_agent_result(
+            agent_result,
+            run_id=run_id,
+        )
+
+        verification_results = [
+            self.fact_checker.verify_finding(finding_id)
+            for finding_id in finding_ids
+        ]
+
+        structurally_verified = (
+            bool(verification_results)
+            and all(
+                check.get("structural_verified", False) is True
+                for check in verification_results
+            )
+        )
+
+        verification_summary = {
+            # Do not claim that scientific support was verified.
+            "verified": False,
+            "structural_verified": structurally_verified,
+            "verification_scope": "structural_only",
+            "scientific_support_assessed": False,
+            "checks": {
+                "all_findings_structurally_verified":
+                    structurally_verified,
+            },
+        }
+
+        evaluation = self.evolution_engine.evaluate_execution(
+            agent_result,
+            verification_summary,
+        )
+
+        self.evolution_engine.update_knowledge(
+            agent_result,
+            evaluation,
+            finding_ids,
+            run_id=run_id,
+        )
+
+        return (
+            finding_ids,
+            verification_results,
+            evaluation,
+        )
+
+    def process_request(
+        self,
+        user_request,
+        run_id=None,
+        target_column=None,
+    ):
+        """
+        Route a user request to DataAgent, MLAgent, or EDAAgent.
+
+        MLAgent requires target_column to identify the value
+        the classification model should predict.
+        """
+
         if (
             not isinstance(user_request, str)
             or not user_request.strip()
@@ -85,10 +169,14 @@ class Orchestrator:
                 "user_request must be a non-empty string."
             )
 
-        # Generate an ID for a new run, or validate a retry ID.
+        user_request = user_request.strip()
+
         if run_id is None:
-            run_id = uuid.uuid4().hex
-        elif not isinstance(run_id, str) or not run_id.strip():
+            run_id = uuid4().hex
+        elif (
+            not isinstance(run_id, str)
+            or not run_id.strip()
+        ):
             raise ValueError(
                 "run_id must be a non-empty string."
             )
@@ -97,25 +185,220 @@ class Orchestrator:
 
         selected_agent = self.router.route(user_request)
 
-        # Routing exists for these agents, but their execution pipelines
-        # have not yet been integrated.
+        # ---------------------------------------------------------
+        # DATA AGENT: inspect data quality
+        # ---------------------------------------------------------
+        if selected_agent == "DataAgent":
+            try:
+                agent_result, profile = self.data_agent.run(
+                    str(self.dataset_path)
+                )
+            except (ValueError, OSError) as exc:
+                return self._response(
+                    user_request,
+                    selected_agent,
+                    "completed_with_errors",
+                    message="Data profiling could not be completed.",
+                    dataset=self.dataset_path.name,
+                    errors=[{"error": str(exc)}],
+                    run_id=run_id,
+                )
+
+            task_run_id = (
+                f"{run_id}:{agent_result.task}"
+            )
+
+            (
+                finding_ids,
+                verification_results,
+                evaluation,
+            ) = self._verify_and_record(
+                agent_result,
+                task_run_id,
+            )
+
+            self.knowledge_graph.save()
+
+            structurally_verified = (
+                bool(verification_results)
+                and all(
+                    item.get("structural_verified", False) is True
+                    for item in verification_results
+                )
+            )
+
+            status = (
+                "completed"
+                if structurally_verified
+                else "completed_with_warnings"
+            )
+
+            return self._response(
+                user_request,
+                selected_agent,
+                status,
+                message="Data quality profiling completed.",
+                dataset=agent_result.dataset,
+                task_count=1,
+                insights=agent_result.findings,
+                results=[
+                    {
+                        "task_id": agent_result.task,
+                        "task": agent_result.task,
+                        "analysis_result": profile,
+                        "findings": agent_result.findings,
+                        "finding_ids": finding_ids,
+                        "verification": verification_results,
+                        "evaluation": evaluation,
+                    }
+                ],
+                errors=[],
+                run_id=run_id,
+            )
+
+        # ---------------------------------------------------------
+        # ML AGENT: train and evaluate a classification model
+        # ---------------------------------------------------------
+        if selected_agent == "MLAgent":
+
+            if (
+                not isinstance(target_column, str)
+                or not target_column.strip()
+            ):
+                return self._response(
+                    user_request,
+                    selected_agent,
+                    "input_required",
+                    message=(
+                        "MLAgent requires a target column. "
+                        "Specify the column you want the model "
+                        "to predict."
+                    ),
+                    dataset=self.dataset_path.name,
+                    task_count=0,
+                    insights=[],
+                    results=[],
+                    errors=[],
+                    run_id=run_id,
+                )
+
+            target_column = target_column.strip()
+
+            try:
+                agent_result, model_details = self.ml_agent.run(
+                    str(self.dataset_path),
+                    target_column=target_column,
+                )
+            except (ValueError, OSError) as exc:
+                return self._response(
+                    user_request,
+                    selected_agent,
+                    "completed_with_errors",
+                    message=(
+                        "ML classification could not be completed."
+                    ),
+                    dataset=self.dataset_path.name,
+                    task_count=0,
+                    insights=[],
+                    results=[],
+                    errors=[{"error": str(exc)}],
+                    run_id=run_id,
+                )
+
+            task_run_id = (
+                f"{run_id}:ML:{target_column}"
+            )
+
+            (
+                finding_ids,
+                verification_results,
+                evaluation,
+            ) = self._verify_and_record(
+                agent_result,
+                task_run_id,
+            )
+
+            self.knowledge_graph.save()
+
+            structurally_verified = (
+                bool(verification_results)
+                and all(
+                    item.get("structural_verified", False) is True
+                    for item in verification_results
+                )
+            )
+
+            status = (
+                "completed"
+                if structurally_verified
+                else "completed_with_warnings"
+            )
+
+            return self._response(
+                user_request,
+                selected_agent,
+                status,
+                message=(
+                    "ML classification and evaluation completed. "
+                    "Metrics describe held-out test performance."
+                ),
+                dataset=agent_result.dataset,
+                task_count=1,
+                insights=agent_result.findings,
+                results=[
+                    {
+                        "task_id": agent_result.task,
+                        "task": agent_result.task,
+                        "analysis_result": model_details,
+                        "findings": agent_result.findings,
+                        "finding_ids": finding_ids,
+                        "verification": verification_results,
+                        "evaluation": evaluation,
+                    }
+                ],
+                errors=[],
+                run_id=run_id,
+            )
+
+        # ---------------------------------------------------------
+        # OTHER AGENTS: report unsupported execution paths honestly
+        # ---------------------------------------------------------
         if selected_agent != "EDAAgent":
             return self._response(
                 user_request,
                 selected_agent,
                 "not_implemented",
                 message=(
-                    f"{selected_agent} has been selected, but its execution "
-                    "workflow is not yet connected."
+                    f"{selected_agent} has been selected, "
+                    "but its execution workflow is not yet connected."
                 ),
+                dataset=self.dataset_path.name,
                 run_id=run_id,
             )
 
-        pipeline = run_analysis(str(self.dataset_path))
+        # ---------------------------------------------------------
+        # EDA AGENT: execute the existing analysis pipeline
+        # ---------------------------------------------------------
+        try:
+            pipeline = run_analysis(
+                str(self.dataset_path)
+            )
+        except (ValueError, OSError) as exc:
+            return self._response(
+                user_request,
+                selected_agent,
+                "completed_with_errors",
+                message="EDA workflow could not be completed.",
+                dataset=self.dataset_path.name,
+                errors=[{"error": str(exc)}],
+                run_id=run_id,
+            )
+
         converted_results = []
         failed_results = []
 
-        for result_index, raw_result in enumerate(pipeline["results"]):
+        for raw_result in pipeline["results"]:
+
             if "error" in raw_result:
                 failed_results.append(raw_result)
                 continue
@@ -126,83 +409,41 @@ class Orchestrator:
                 agent=selected_agent,
             )
 
-            # Use the task ID to derive a stable ID for this task's run.
-            # Fall back to the task's position if it has no task ID.
-            raw_task_id = raw_result.get("task_id")
-            if raw_task_id is None:
-                raw_task_id = result_index
-
-            task_run_id = f"{run_id}:{raw_task_id}"
-
-            finding_ids = self.graph_builder.add_agent_result(
-                agent_result,
-                run_id=task_run_id,
+            task_id = (
+                raw_result.get("task_id")
+                or agent_result.task
             )
 
-            verification_results = [
-                self.fact_checker.verify_finding(finding_id)
-                for finding_id in finding_ids
-            ]
+            task_run_id = f"{run_id}:{task_id}"
 
-            # Assess structural validity without claiming scientific proof.
-            structurally_verified = (
-                bool(verification_results)
-                and all(
-                    check.get(
-                        "structural_verified",
-                        check.get("verified", False),
-                    ) is True
-                    for check in verification_results
-                )
-            )
-
-            verification_summary = {
-                "verified": False,
-                "structural_verified": structurally_verified,
-                "verification_scope": "structural_only",
-                "scientific_support_assessed": False,
-                "checks": {
-                    "all_findings_structurally_verified": (
-                        structurally_verified
-                    ),
-                },
-            }
-
-            evaluation = self.evolution_engine.evaluate_execution(
-                agent_result,
-                verification_summary,
-            )
-
-            self.evolution_engine.update_knowledge(
-                agent_result,
-                evaluation,
+            (
                 finding_ids,
-                run_id=task_run_id,
+                verification_results,
+                evaluation,
+            ) = self._verify_and_record(
+                agent_result,
+                task_run_id,
             )
 
-            # Persist findings and execution history.
             self.knowledge_graph.save()
 
-            converted_results.append({
-                "task_id": raw_result.get("task_id"),
-                "task": raw_result.get("task"),
-                "analysis_result": raw_result,
-                "findings": agent_result.findings,
-                "finding_ids": finding_ids,
-                "verification": verification_results,
-                "evaluation": evaluation,
-            })
+            converted_results.append(
+                {
+                    "task_id": raw_result.get("task_id"),
+                    "task": raw_result.get("task"),
+                    "analysis_result": raw_result,
+                    "findings": agent_result.findings,
+                    "finding_ids": finding_ids,
+                    "verification": verification_results,
+                    "evaluation": evaluation,
+                }
+            )
 
-        # Determine whether the workflow completed with structurally
-        # valid findings. This does not establish scientific truth.
         all_structurally_verified = (
             bool(converted_results)
             and not failed_results
             and all(
-                check.get(
-                    "structural_verified",
-                    check.get("verified", False),
-                ) is True
+                check.get("structural_verified", False) is True
                 for item in converted_results
                 for check in item["verification"]
             )
@@ -220,7 +461,10 @@ class Orchestrator:
             selected_agent,
             status,
             message="EDA workflow executed.",
-            dataset=pipeline["dataset"],
+            dataset=pipeline.get(
+                "dataset",
+                self.dataset_path.name,
+            ),
             task_count=len(pipeline["tasks"]),
             insights=pipeline["insights"],
             results=converted_results,
@@ -231,7 +475,11 @@ class Orchestrator:
 
 if __name__ == "__main__":
     orchestrator = Orchestrator()
-    request = input("What would you like to analyze? ")
+
+    request = input(
+        "What would you like to analyze? "
+    )
+
     result = orchestrator.process_request(request)
 
     print("\nRequest:", result["user_request"])
@@ -243,9 +491,9 @@ if __name__ == "__main__":
     if result["status"] == "completed":
         print("Tasks executed:", result["task_count"])
         print(
-            "Findings structurally validated:",
+            "Findings recorded:",
             sum(
-                len(item["finding_ids"])
+                len(item.get("finding_ids", []))
                 for item in result["results"]
             ),
         )

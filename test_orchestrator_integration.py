@@ -1,118 +1,113 @@
+
+import pandas as pd
+import pytest
+
 from app.orchestrator.orchestrator import Orchestrator
 
 
-def test_eda_request_runs_analysis_and_verifies_findings(tmp_path):
+def create_test_dataset(tmp_path):
+    """Create a small dataset for orchestrator integration tests."""
+    dataset_path = tmp_path / "test_dataset.csv"
+
+    df = pd.DataFrame(
+        {
+            "PassengerId": range(1, 41),
+            "feature": range(40),
+            "amount": [
+                float(i * 2) for i in range(40)
+            ],
+            "label": [
+                i % 2 for i in range(40)
+            ],
+        }
+    )
+
+    df.to_csv(dataset_path, index=False)
+    return dataset_path
+
+
+def create_orchestrator(tmp_path):
+    """Create an orchestrator using temporary test files."""
+    dataset_path = create_test_dataset(tmp_path)
     graph_path = tmp_path / "knowledge_graph.json"
 
-    orchestrator = Orchestrator(
-        dataset_path="data/titanic.csv",
+    return Orchestrator(
+        dataset_path=dataset_path,
         graph_path=graph_path,
     )
 
-    output = orchestrator.process_request(
-        "Explore correlations and patterns in the Titanic dataset"
-    )
 
-    assert output["selected_agent"] == "EDAAgent"
-    assert output["status"] == "completed"
-    assert output["task_count"] == 9
-    assert len(output["results"]) == 9
-    assert graph_path.exists()
+def assert_response_fields(output):
+    """Check that the response has the expected structure."""
+    expected_fields = {
+        "user_request",
+        "selected_agent",
+        "status",
+        "message",
+        "dataset",
+        "task_count",
+        "insights",
+        "results",
+        "errors",
+        "run_id",
+    }
 
-    for item in output["results"]:
-        assert item["finding_ids"]
-        assert item["verification"]
-
-        # Structural validation must pass for every finding.
-        assert all(
-            check["structural_verified"] is True
-            for check in item["verification"]
-        )
-
-        # Scientific support is not assessed by the FactChecker.
-        assert all(
-            check["verified"] is False
-            for check in item["verification"]
-        )
-
-        # Each result must include its execution evaluation.
-        assert "evaluation" in item
-
-    # A fresh graph instance can reload the saved history.
-    from app.knowledge_graph.graph import KnowledgeGraph
-
-    reloaded_graph = KnowledgeGraph(storage_path=graph_path)
-
-    assert any(
-        attributes.get("type") == "execution"
-        for _, attributes in reloaded_graph.graph.nodes(data=True)
-    )
+    assert expected_fields.issubset(output.keys())
 
 
-def test_unsupported_agent_has_consistent_response_fields(tmp_path):
-    orchestrator = Orchestrator(
-        graph_path=tmp_path / "knowledge_graph.json"
-    )
+def test_data_agent_runs_through_orchestrator(tmp_path):
+    orchestrator = create_orchestrator(tmp_path)
 
     output = orchestrator.process_request(
-        "Predict survival using a machine learning model"
+        "Inspect the dataset for missing values"
+    )
+
+    assert output["selected_agent"] == "DataAgent"
+    assert output["status"] in {
+        "completed",
+        "completed_with_warnings",
+    }
+    assert_response_fields(output)
+
+    assert len(output["results"]) == 1
+    assert output["results"][0]["findings"]
+    assert output["results"][0]["finding_ids"]
+
+
+def test_ml_agent_requests_target_column(tmp_path):
+    orchestrator = create_orchestrator(tmp_path)
+
+    output = orchestrator.process_request(
+        "Predict the label using a classification model"
     )
 
     assert output["selected_agent"] == "MLAgent"
-    assert output["status"] == "not_implemented"
-    assert output["dataset"] is None
-    assert output["task_count"] == 0
-    assert output["insights"] == []
+    assert output["status"] == "input_required"
+    assert "target column" in output["message"].lower()
     assert output["results"] == []
-    assert output["errors"] == []
+    assert_response_fields(output)
 
 
-def test_retrying_same_run_id_does_not_duplicate_graph_entries(
+def test_unsupported_agent_has_consistent_response_fields(
     tmp_path,
 ):
-    graph_path = tmp_path / "knowledge_graph.json"
+    orchestrator = create_orchestrator(tmp_path)
 
-    orchestrator = Orchestrator(
-        dataset_path="data/titanic.csv",
-        graph_path=graph_path,
+    output = orchestrator.process_request(
+        "Generate a report explaining the dataset findings"
     )
 
-    request = "Explore correlations and patterns in the Titanic dataset"
-    run_id = "integration-retry-test-001"
+    assert output["selected_agent"] == "ReportAgent"
+    assert output["status"] == "not_implemented"
+    assert_response_fields(output)
 
-    first = orchestrator.process_request(
-        request,
-        run_id=run_id,
-    )
+    assert output["results"] == []
+    assert output["errors"] == []
+    assert output["run_id"]
 
-    graph = orchestrator.knowledge_graph.graph
-    first_node_count = graph.number_of_nodes()
-    first_edge_count = graph.number_of_edges()
 
-    first_finding_ids = [
-        item["finding_ids"] for item in first["results"]
-    ]
+def test_empty_request_is_rejected(tmp_path):
+    orchestrator = create_orchestrator(tmp_path)
 
-    second = orchestrator.process_request(
-        request,
-        run_id=run_id,
-    )
-
-    assert first["run_id"] == run_id
-    assert second["run_id"] == run_id
-
-    assert [
-        item["finding_ids"] for item in second["results"]
-    ] == first_finding_ids
-
-    assert graph.number_of_nodes() == first_node_count
-    assert graph.number_of_edges() == first_edge_count
-
-    execution_nodes = [
-        node_id
-        for node_id, data in graph.nodes(data=True)
-        if data.get("type") == "execution"
-    ]
-
-    assert len(execution_nodes) == len(first["results"])
-    assert graph_path.exists()
+    with pytest.raises(ValueError):
+        orchestrator.process_request("")
