@@ -67,6 +67,7 @@ def test_data_agent_runs_through_orchestrator(tmp_path):
         "completed",
         "completed_with_warnings",
     }
+
     assert_response_fields(output)
 
     assert len(output["results"]) == 1
@@ -84,13 +85,12 @@ def test_ml_agent_requests_target_column(tmp_path):
     assert output["selected_agent"] == "MLAgent"
     assert output["status"] == "input_required"
     assert "target column" in output["message"].lower()
+
     assert output["results"] == []
     assert_response_fields(output)
 
 
-def test_unsupported_agent_has_consistent_response_fields(
-    tmp_path,
-):
+def test_report_agent_has_consistent_response_fields(tmp_path):
     orchestrator = create_orchestrator(tmp_path)
 
     output = orchestrator.process_request(
@@ -98,12 +98,22 @@ def test_unsupported_agent_has_consistent_response_fields(
     )
 
     assert output["selected_agent"] == "ReportAgent"
-    assert output["status"] == "not_implemented"
+    assert output["status"] == "no_findings"
     assert_response_fields(output)
 
-    assert output["results"] == []
+    # ReportAgent is implemented, so it returns a report even when
+    # the graph contains no findings.
+    assert len(output["results"]) == 1
     assert output["errors"] == []
     assert output["run_id"]
+
+    report = output["results"][0]["analysis_result"]
+
+    assert report["agent"] == "ReportAgent"
+    assert report["status"] == "no_findings"
+    assert report["finding_count"] == 0
+    assert report["findings"] == []
+    assert "No findings" in report["report_markdown"]
 
 
 def test_empty_request_is_rejected(tmp_path):

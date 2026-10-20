@@ -1,11 +1,15 @@
 
+"""Orchestrate the framework's agent workflows."""
+
 from pathlib import Path
 from uuid import uuid4
 
 from app.orchestrator.router import AdaptiveRouter
 from app.analysis_adapter import analysis_result_to_agent_result
 from app.agents.data_agent import DataAgent
+from app.agents.explainability_agent import ExplainabilityAgent
 from app.agents.ml_agent import MLAgent
+from app.agents.report_agent import ReportAgent
 from app.knowledge_graph.builder import KnowledgeGraphBuilder
 from app.knowledge_graph.evolution import SelfEvolutionEngine
 from app.knowledge_graph.graph import KnowledgeGraph
@@ -17,7 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Orchestrator:
-    """Route requests and execute the connected agent workflows."""
+    """Route requests to available agents and return consistent results."""
 
     def __init__(
         self,
@@ -55,9 +59,10 @@ class Orchestrator:
             self.knowledge_graph
         )
 
-        # Initialize the implemented agents.
         self.data_agent = DataAgent()
         self.ml_agent = MLAgent()
+        self.report_agent = ReportAgent()
+        self.explainability_agent = ExplainabilityAgent()
 
     def _response(
         self,
@@ -73,7 +78,7 @@ class Orchestrator:
         errors=None,
         run_id=None,
     ):
-        """Return a consistent response for every workflow."""
+        """Return a consistent response structure."""
 
         return {
             "user_request": user_request,
@@ -93,12 +98,7 @@ class Orchestrator:
         agent_result,
         run_id,
     ):
-        """
-        Add the agent's findings to the knowledge graph,
-        run structural checks, and record execution history.
-
-        Structural verification does not establish scientific truth.
-        """
+        """Store findings, check graph structure, and record execution."""
 
         finding_ids = self.graph_builder.add_agent_result(
             agent_result,
@@ -119,7 +119,6 @@ class Orchestrator:
         )
 
         verification_summary = {
-            # Do not claim that scientific support was verified.
             "verified": False,
             "structural_verified": structurally_verified,
             "verification_scope": "structural_only",
@@ -154,12 +153,7 @@ class Orchestrator:
         run_id=None,
         target_column=None,
     ):
-        """
-        Route a user request to DataAgent, MLAgent, or EDAAgent.
-
-        MLAgent requires target_column to identify the value
-        the classification model should predict.
-        """
+        """Route a request and execute its selected agent."""
 
         if (
             not isinstance(user_request, str)
@@ -186,7 +180,7 @@ class Orchestrator:
         selected_agent = self.router.route(user_request)
 
         # ---------------------------------------------------------
-        # DATA AGENT: inspect data quality
+        # DATA AGENT
         # ---------------------------------------------------------
         if selected_agent == "DataAgent":
             try:
@@ -204,9 +198,7 @@ class Orchestrator:
                     run_id=run_id,
                 )
 
-            task_run_id = (
-                f"{run_id}:{agent_result.task}"
-            )
+            task_run_id = f"{run_id}:{agent_result.task}"
 
             (
                 finding_ids,
@@ -252,15 +244,13 @@ class Orchestrator:
                         "evaluation": evaluation,
                     }
                 ],
-                errors=[],
                 run_id=run_id,
             )
 
         # ---------------------------------------------------------
-        # ML AGENT: train and evaluate a classification model
+        # ML AGENT
         # ---------------------------------------------------------
         if selected_agent == "MLAgent":
-
             if (
                 not isinstance(target_column, str)
                 or not target_column.strip()
@@ -275,10 +265,6 @@ class Orchestrator:
                         "to predict."
                     ),
                     dataset=self.dataset_path.name,
-                    task_count=0,
-                    insights=[],
-                    results=[],
-                    errors=[],
                     run_id=run_id,
                 )
 
@@ -298,9 +284,6 @@ class Orchestrator:
                         "ML classification could not be completed."
                     ),
                     dataset=self.dataset_path.name,
-                    task_count=0,
-                    insights=[],
-                    results=[],
                     errors=[{"error": str(exc)}],
                     run_id=run_id,
                 )
@@ -356,12 +339,169 @@ class Orchestrator:
                         "evaluation": evaluation,
                     }
                 ],
-                errors=[],
                 run_id=run_id,
             )
 
         # ---------------------------------------------------------
-        # OTHER AGENTS: report unsupported execution paths honestly
+        # EXPLAINABILITY AGENT
+        # ---------------------------------------------------------
+        if selected_agent == "ExplainabilityAgent":
+            if (
+                not isinstance(target_column, str)
+                or not target_column.strip()
+            ):
+                return self._response(
+                    user_request,
+                    selected_agent,
+                    "input_required",
+                    message=(
+                        "ExplainabilityAgent requires a target column. "
+                        "Specify the classification outcome whose "
+                        "predictions you want to explain."
+                    ),
+                    dataset=self.dataset_path.name,
+                    run_id=run_id,
+                )
+
+            target_column = target_column.strip()
+
+            try:
+                agent_result, explanation_details = (
+                    self.explainability_agent.run(
+                        str(self.dataset_path),
+                        target_column=target_column,
+                    )
+                )
+            except (ValueError, OSError, TypeError) as exc:
+                return self._response(
+                    user_request,
+                    selected_agent,
+                    "completed_with_errors",
+                    message=(
+                        "Model explanation could not be completed."
+                    ),
+                    dataset=self.dataset_path.name,
+                    errors=[{"error": str(exc)}],
+                    run_id=run_id,
+                )
+
+            task_run_id = (
+                f"{run_id}:EXPLAINABILITY:{target_column}"
+            )
+
+            (
+                finding_ids,
+                verification_results,
+                evaluation,
+            ) = self._verify_and_record(
+                agent_result,
+                task_run_id,
+            )
+
+            self.knowledge_graph.save()
+
+            structurally_verified = (
+                bool(verification_results)
+                and all(
+                    item.get("structural_verified", False) is True
+                    for item in verification_results
+                )
+            )
+
+            status = (
+                "completed"
+                if structurally_verified
+                else "completed_with_warnings"
+            )
+
+            return self._response(
+                user_request,
+                selected_agent,
+                status,
+                message=(
+                    "Permutation feature-importance analysis completed "
+                    "on held-out test data. The explanation uses a "
+                    "newly fitted reference model."
+                ),
+                dataset=agent_result.dataset,
+                task_count=1,
+                insights=agent_result.findings,
+                results=[
+                    {
+                        "task_id": agent_result.task,
+                        "task": agent_result.task,
+                        "analysis_result": explanation_details,
+                        "findings": agent_result.findings,
+                        "finding_ids": finding_ids,
+                        "verification": verification_results,
+                        "evaluation": evaluation,
+                    }
+                ],
+                run_id=run_id,
+            )
+
+        # ---------------------------------------------------------
+        # REPORT AGENT
+        # ---------------------------------------------------------
+        if selected_agent == "ReportAgent":
+            try:
+                report = self.report_agent.run(
+                    self.knowledge_graph,
+                    dataset_name=self.dataset_path.name,
+                    title="Data Analytics Report",
+                )
+            except (TypeError, ValueError, OSError) as exc:
+                return self._response(
+                    user_request,
+                    selected_agent,
+                    "completed_with_errors",
+                    message="Report generation could not be completed.",
+                    dataset=self.dataset_path.name,
+                    errors=[{"error": str(exc)}],
+                    run_id=run_id,
+                )
+
+            report_status = (
+                "completed"
+                if report["status"] == "completed"
+                else "no_findings"
+            )
+
+            report_findings = report["findings"]
+
+            return self._response(
+                user_request,
+                selected_agent,
+                report_status,
+                message=report["summary"],
+                dataset=self.dataset_path.name,
+                task_count=1,
+                insights=[
+                    finding["description"]
+                    for finding in report_findings
+                ],
+                results=[
+                    {
+                        "task_id": "generate_report",
+                        "task": "generate_report",
+                        "analysis_result": report,
+                        "findings": [
+                            finding["description"]
+                            for finding in report_findings
+                        ],
+                        "finding_ids": [
+                            finding["finding_id"]
+                            for finding in report_findings
+                        ],
+                        "verification": [],
+                        "evaluation": None,
+                    }
+                ],
+                run_id=run_id,
+            )
+
+        # ---------------------------------------------------------
+        # UNSUPPORTED AGENT FALLBACK
         # ---------------------------------------------------------
         if selected_agent != "EDAAgent":
             return self._response(
@@ -369,15 +509,15 @@ class Orchestrator:
                 selected_agent,
                 "not_implemented",
                 message=(
-                    f"{selected_agent} has been selected, "
-                    "but its execution workflow is not yet connected."
+                    f"{selected_agent} has been selected, but its "
+                    "execution workflow is not yet connected."
                 ),
                 dataset=self.dataset_path.name,
                 run_id=run_id,
             )
 
         # ---------------------------------------------------------
-        # EDA AGENT: execute the existing analysis pipeline
+        # EDA AGENT
         # ---------------------------------------------------------
         try:
             pipeline = run_analysis(
@@ -398,7 +538,6 @@ class Orchestrator:
         failed_results = []
 
         for raw_result in pipeline["results"]:
-
             if "error" in raw_result:
                 failed_results.append(raw_result)
                 continue
@@ -476,10 +615,7 @@ class Orchestrator:
 if __name__ == "__main__":
     orchestrator = Orchestrator()
 
-    request = input(
-        "What would you like to analyze? "
-    )
-
+    request = input("What would you like to analyze? ")
     result = orchestrator.process_request(request)
 
     print("\nRequest:", result["user_request"])
